@@ -26,6 +26,7 @@ from ansible.parsing.yaml.objects import AnsibleVaultEncryptedUnicode
 from . import tap_properties
 
 LOGGER = logging.getLogger(__name__)
+ENV_VAR_PATTERN = re.compile(r'^env_var\(\'(.*)\'\)(.*)$')
 
 
 class AnsibleJSONEncoder(json.JSONEncoder):
@@ -185,6 +186,11 @@ def load_yaml(yaml_file, vault_secret=None):
         secret_file.load()
         vault.secrets = [('default', secret_file)]
 
+    # YAML ENV VAR
+    # name: !ENV env_var('FOO')/bar
+    yaml.add_implicit_resolver("!ENV", ENV_VAR_PATTERN)
+    yaml.add_constructor('!ENV', env_var_constructor)
+
     data = None
     if os.path.isfile(yaml_file):
         with open(yaml_file, 'r') as stream:
@@ -193,13 +199,20 @@ def load_yaml(yaml_file, vault_secret=None):
                     file_data = stream.read()
                     data = yaml.load(vault.decrypt(file_data, None))
                 else:
-                    loader = AnsibleLoader(stream, None, vault.secrets)
-                    try:
-                        data = loader.get_single_data()
-                    except Exception as exc:
-                        raise Exception(f'Error when loading YAML config at {yaml_file} {exc}')
-                    finally:
-                        loader.dispose()
+                    file_data = stream.read()
+                    data = yaml.load(file_data, Loader=yaml.Loader)
+
+                    '''
+                    Commenting code below for posterity. We are not using ansible functionality but yaml load should 
+                    follow the same code path regardless of the file encryption state.
+                    '''
+                    # loader = AnsibleLoader(stream, None, vault.secrets)
+                    # try:
+                    #     data = loader.get_single_data()
+                    # except Exception as exc:
+                    #     raise Exception(f'Error when loading YAML config at {yaml_file} {exc}')
+                    # finally:
+                    #     loader.dispose()
             except yaml.YAMLError as exc:
                 raise Exception(f'Error when loading YAML config at {yaml_file} {exc}')
     else:
@@ -522,3 +535,10 @@ def create_temp_file(suffix=None, prefix=None, dir=None, text=None):
     if dir:
         os.makedirs(dir, exist_ok=True)
     return tempfile.mkstemp(suffix, prefix, dir, text)
+
+
+def env_var_constructor(loader, node):
+    value = loader.construct_scalar(node)
+    env_var, remaining_path = ENV_VAR_PATTERN.match(value).groups()
+
+    return os.environ[env_var] + remaining_path
