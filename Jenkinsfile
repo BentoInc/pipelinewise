@@ -9,6 +9,7 @@ pipeline {
 
   parameters {
     string(name: 'image_tag', defaultValue: 'bento-pipelinewise', description: 'Output name of Docker image')
+    string(name: 'connectors', defaultValue: 'all', description: 'Connectors to enable')
   }
 
   stages {
