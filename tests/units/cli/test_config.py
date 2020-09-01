@@ -36,6 +36,16 @@ class TestConfig:
         assert config.config_dir == PIPELINEWISE_TEST_HOME
         assert config.config_path == '{}/config.json'.format(PIPELINEWISE_TEST_HOME)
 
+        # Vault encrypted alert handlers should be loaded into global config
+        assert config.global_config == {
+            'alert_handlers': {
+                'slack': {
+                    'token': 'Vault Encrypted Secret Fruit',
+                    'channel': '#slack-channel'
+                }
+            }
+        }
+
         # The target dictionary should contain every target and tap parsed from YAML files
         assert config.targets == {
             'test_snowflake_target': {
@@ -143,7 +153,6 @@ class TestConfig:
         assert pytest_wrapped_e.type == SystemExit
         assert pytest_wrapped_e.value.code == 1
 
-
     def test_from_invalid_yamls_fails(self):
         """
         Test creating Config object using invalid YAML configuration
@@ -213,6 +222,12 @@ class TestConfig:
 
         # Check content of the generated JSON files
         assert cli.utils.load_json(main_config_json) == {
+            'alert_handlers': {
+                'slack': {
+                    'token': 'Vault Encrypted Secret Fruit',
+                    'channel': '#slack-channel'
+                }
+            },
             'targets':
                 [{
                     'id': 'test_snowflake_target',
@@ -225,6 +240,8 @@ class TestConfig:
                             'type': 'tap-mysql',
                             'name': 'Sample MySQL Database',
                             'owner': 'somebody@foo.com',
+                            'stream_buffer_size': None,
+                            'send_alert': True,
                             'enabled': True,
                         }
                     ]

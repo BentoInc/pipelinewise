@@ -13,6 +13,13 @@ class TestUtils:
     Unit Tests for PipelineWise CLI utility functions
     """
 
+    def assert_json_is_invalid(self, schema, invalid_target):
+        """Simple assertion to check if validate function exits with error"""
+        with pytest.raises(SystemExit) as pytest_wrapped_e:
+            cli.utils.validate(invalid_target, schema)
+        assert pytest_wrapped_e.type == SystemExit
+        assert pytest_wrapped_e.value.code == 1
+
     def test_json_detectors(self):
         """Testing JSON detector functions"""
         assert cli.utils.is_json('{Invalid JSON}') is False
@@ -122,11 +129,13 @@ class TestUtils:
             ['Apple', 'Orange', 'Strawberry', 'Mango', 'Vault Encrypted Secret Fruit']
 
     def test_sample_file_path(self):
-        """Sample files must be a tap, target YAML or README file"""
+        """Sample files must be global config, tap, target YAML or README file"""
         for sample in cli.utils.get_sample_file_paths():
             assert os.path.isfile(sample) is True
             assert \
-                re.match('.*(tap|target)_.*.yml.sample$', sample) or re.match('.*README.md$', sample)
+                re.match('.*config.yml$', sample) or \
+                re.match('.*(tap|target)_.*.yml.sample$', sample) or \
+                re.match('.*README.md$', sample)
 
     def test_extract_log_attributes(self):
         """Log files must match to certain pattern with embedded attributes in the file name"""
@@ -205,8 +214,8 @@ class TestUtils:
             os.path.dirname(__file__)))
         assert cli.utils.load_schema('tap') == tap_schema
 
-    def test_json_validate(self):
-        """Test JSON schema validator functions"""
+    def test_json_validate_tap(self):
+        """Test JSON schema validator functions on taps"""
         schema = cli.utils.load_schema('tap')
 
         # Valid instance should return None
@@ -215,10 +224,19 @@ class TestUtils:
 
         # Invalid instance should exit
         invalid_tap = cli.utils.load_yaml('{}/resources/tap-invalid.yml'.format(os.path.dirname(__file__)))
-        with pytest.raises(SystemExit) as pytest_wrapped_e:
-            cli.utils.validate(invalid_tap, schema)
-        assert pytest_wrapped_e.type == SystemExit
-        assert pytest_wrapped_e.value.code == 1
+        self.assert_json_is_invalid(schema, invalid_tap)
+
+    def test_json_validate_target(self):
+        """Test JSON schema validator functions on targets"""
+        schema = cli.utils.load_schema('target')
+
+        # Valid instance should return None
+        valid_target = cli.utils.load_yaml('{}/resources/target-valid-s3-csv.yml'.format(os.path.dirname(__file__)))
+        assert cli.utils.validate(valid_target, schema) is None
+
+        # Invalid instance should exit
+        invalid_target = cli.utils.load_yaml('{}/resources/target-invalid-s3-csv.yml'.format(os.path.dirname(__file__)))
+        self.assert_json_is_invalid(schema, invalid_target)
 
     def test_delete_keys(self):
         """Test dictionary functions"""
@@ -300,40 +318,6 @@ class TestUtils:
             'tables': 'SCHEMA_1.TABLE_ONE,SCHEMA_1.TABLE_TWO'
         }
 
-    def test_run_command(self):
-        """Test run command functions
-
-            Run command runs everything enclosed by /bin/bash -o pipefail -c '{}'
-            This means arguments should pass as plain string after the command
-
-            Return value is an array of: [return_code, stdout, stderr]
-        """
-
-        # Printing something to stdout should return 0
-        [returncode, stdout, stderr] = cli.utils.run_command('echo this is a test line')
-        assert [returncode, stdout, stderr] == [0, 'this is a test line\n', '']
-
-        # Running an invalid command should return 127 and some error message to stdout
-        [returncode, stdout, stderr] = cli.utils.run_command('invalid-command this is an invalid command')
-        assert [returncode, stdout] == [127, '']
-        assert stderr != ''
-
-        # If loggin enabled then a success command should create log file with success status
-        [returncode, stdout, stderr] = cli.utils.run_command('echo this is a test line', log_file='./test.log')
-        assert [returncode, stdout, stderr] == [0, 'this is a test line\n', None]
-        if os.path.isfile('test.log.success'):
-            os.remove('test.log.success')
-
-        # If logging enabled then a failed command should create log file with failed status
-        # NOTE: When logging is enabled and the command fails then it raises an exception
-        #       This behaviour is not in sync with no logging option
-        # TODO: Sync failed command execution behaviour with logging and no-logging option
-        #       Both should return [rc, stdout, stderr] list or both should raise exception
-        with pytest.raises(Exception):
-            cli.utils.run_command('invalid-command this is an invalid command', log_file='./test.log')
-        if os.path.isfile('test.log.failed'):
-            os.remove('test.log.failed')
-
     def test_get_tap_target_names(self):
         """Test get tap and target yamls"""
         expected_tap_names = {'tap_test.yml', 'tap_2test.yml', 'tap_valid.yaml'}
@@ -362,3 +346,53 @@ class TestUtils:
                                                prefix='pipelinewise_test_temp_file_')[1]
         assert os.path.isfile(temp_file)
         os.remove(temp_file)
+
+    def test_find_errors_in_log_file(self):
+        """Test reading the last n lines of a file"""
+        # Should return an empty list if no error in the file
+        log_file = '{}/resources/sample_log_files/tap-run-no-errors.log'.format(os.path.dirname(__file__))
+        assert cli.utils.find_errors_in_log_file(log_file) == []
+
+        # Should return the line with errors
+        log_file = '{}/resources/sample_log_files/tap-run-errors.log'.format(os.path.dirname(__file__))
+        assert cli.utils.find_errors_in_log_file(log_file) == \
+               ['time=2020-07-15 11:24:43 logger_name=tap_postgres log_level=CRITICAL This is a critical error\n',
+                'time=2020-07-15 11:24:43 logger_name=tap_postgres log_level=EXCEPTION This is an exception\n',
+                'time=2020-07-15 11:24:43 logger_name=tap_postgres log_level=ERROR This is an error\n',
+                'pymysql.err.OperationalError: (2013, '
+                "'Lost connection to MySQL server during query ([Errno 104] Connection reset by peer)')\n",
+                'time=2020-07-15 11:24:43 logger_name=tap_postgres log_level=ERROR '
+                'message=error with status PGRES_COPY_BOTH and no message from the libpq\n',
+                'time=2020-07-15 11:24:43 logger_name=tap_postgres log_level=CRITICAL '
+                'message=error with status PGRES_COPY_BOTH and no message from the libpq\n',
+                'snowflake.connector.errors.ProgrammingError: 091003 (22000): '
+                'Failure using stage area. Cause: [Access Denied (Status Code: 403; Error Code: AccessDenied)]\n',
+                'botocore.exceptions.HTTPClientError: An HTTP Client raised and unhandled exception: '
+                "'No field numbered 1 is present in this asn1crypto.keys.PublicKeyInfo'\n",
+                'foo.exception.FakeException: This is a test exception\n',
+                'foo.error.FakeError: This is a test exception\n']
+
+        # Should return the default max number of errors
+        log_file = '{}/resources/sample_log_files/tap-run-lot-of-errors.log'.format(os.path.dirname(__file__))
+        assert cli.utils.find_errors_in_log_file(log_file) == \
+            ['time=2020-07-15 11:24:43 logger_name=tap_postgres log_level=CRITICAL This is a critical error 1\n',
+             'time=2020-07-15 11:24:43 logger_name=tap_postgres log_level=CRITICAL This is a critical error 2\n',
+             'time=2020-07-15 11:24:43 logger_name=tap_postgres log_level=CRITICAL This is a critical error 3\n',
+             'time=2020-07-15 11:24:43 logger_name=tap_postgres log_level=CRITICAL This is a critical error 4\n',
+             'time=2020-07-15 11:24:43 logger_name=tap_postgres log_level=CRITICAL This is a critical error 5\n',
+             'time=2020-07-15 11:24:43 logger_name=tap_postgres log_level=CRITICAL This is a critical error 6\n',
+             'time=2020-07-15 11:24:43 logger_name=tap_postgres log_level=CRITICAL This is a critical error 7\n',
+             'time=2020-07-15 11:24:43 logger_name=tap_postgres log_level=CRITICAL This is a critical error 8\n',
+             'time=2020-07-15 11:24:43 logger_name=tap_postgres log_level=CRITICAL This is a critical error 9\n',
+             'time=2020-07-15 11:24:43 logger_name=tap_postgres log_level=CRITICAL This is a critical error 10\n']
+
+        # Should return the custom max number of errors
+        log_file = '{}/resources/sample_log_files/tap-run-lot-of-errors.log'.format(os.path.dirname(__file__))
+        assert cli.utils.find_errors_in_log_file(log_file, max_errors=2) == \
+            ['time=2020-07-15 11:24:43 logger_name=tap_postgres log_level=CRITICAL This is a critical error 1\n',
+             'time=2020-07-15 11:24:43 logger_name=tap_postgres log_level=CRITICAL This is a critical error 2\n']
+
+        # Should return the custom max number of errors
+        log_file = '{}/resources/sample_log_files/tap-run-errors.log'.format(os.path.dirname(__file__))
+        assert cli.utils.find_errors_in_log_file(log_file, error_pattern=re.compile('CUSTOM-ERR-PATTERN')) == \
+            ['CUSTOM-ERR-PATTERN: This is a custom pattern error message\n']

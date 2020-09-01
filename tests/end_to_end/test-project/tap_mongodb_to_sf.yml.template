@@ -19,7 +19,10 @@ db_conn:
   password: "${TAP_MONGODB_PASSWORD}"           # Mongodb plain string or vault encrypted
   auth_database: "admin"            			# Mongodb database to authenticate on
   dbname: "${TAP_MONGODB_DB}"           		# Mongodb database name to sync from
-#  replica_set: rs0      						# Mongodb replica set name, default null
+  replica_set: rs0      						# Mongodb replica set name, default null
+  write_batch_rows: 500
+  update_buffer_size: 30
+#  await_time_ms: 5000 # 5 sec
 
 # ------------------------------------------------------------------------------
 # Destination (Target) - Target properties
@@ -27,6 +30,7 @@ db_conn:
 # ------------------------------------------------------------------------------
 target: "snowflake"                   # ID of the target connector where the data will be loaded
 batch_size_rows: 1000                  # Batch size for the stream to optimise load performance
+stream_buffer_size: 0                  # In-memory buffer size (MB) between taps and targets for asynchronous data pipes
 
 # ------------------------------------------------------------------------------
 # Source to target Schema mapping
@@ -37,7 +41,6 @@ schemas:
 
     tables:
       - table_name: "listings"
-        replication_method: "FULL_TABLE"
 
       - table_name: "my_collection"
         replication_method: "LOG_BASED"

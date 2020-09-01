@@ -6,6 +6,7 @@ from random import randint
 import bson
 import pytest
 from bson import Timestamp
+from pipelinewise.fastsync import mysql_to_postgres
 
 from .helpers import tasks
 from .helpers import assertions
@@ -13,6 +14,7 @@ from .helpers.env import E2EEnv
 
 DIR = os.path.dirname(__file__)
 TAP_MARIADB_ID = 'mariadb_to_pg'
+TAP_MARIADB_BUFFERED_STREAM_ID = 'mariadb_to_pg_buffered_stream'
 TAP_MONGODB_ID = 'mongo_to_pg'
 TAP_POSTGRES_ID = 'postgres_to_pg'
 TAP_S3_CSV_ID = 's3_csv_to_pg'
@@ -62,16 +64,36 @@ class TestTargetPostgres:
         assertions.assert_command_success(return_code, stdout, stderr)
 
     @pytest.mark.dependency(depends=['import_config'])
-    def test_replicate_mariadb_to_pg(self):
+    def test_replicate_mariadb_to_pg(self, tap_mariadb_id=TAP_MARIADB_ID):
         """Replicate data from MariaDB to Postgres DWH"""
         # 1. Run tap first time - both fastsync and a singer should be triggered
-        assertions.assert_run_tap_success(TAP_MARIADB_ID, TARGET_ID, ['fastsync', 'singer'])
+        assertions.assert_run_tap_success(tap_mariadb_id, TARGET_ID, ['fastsync', 'singer'])
         assertions.assert_row_counts_equal(self.run_query_tap_mysql, self.run_query_target_postgres)
-        assertions.assert_all_columns_exist(self.run_query_tap_mysql, self.e2e.run_query_target_postgres)
+        assertions.assert_all_columns_exist(self.run_query_tap_mysql, self.run_query_target_postgres,
+                                            mysql_to_postgres.tap_type_to_target_type)
 
         # 2. Make changes in MariaDB source database
         #  LOG_BASED
         self.run_query_tap_mysql('UPDATE weight_unit SET isactive = 0 WHERE weight_unit_id IN (2, 3, 4)')
+        self.run_query_tap_mysql('ALTER table weight_unit add column bool_col bool;')
+        self.run_query_tap_mysql('INSERT into weight_unit(weight_unit_name, isActive, original_date_created, bool_col) '
+                                 'values (\'Oz\', false, \'2020-07-23 10:00:00\', true);')
+        self.run_query_tap_mysql('ALTER table weight_unit add column blob_col blob;')
+        self.run_query_tap_mysql('INSERT into weight_unit(weight_unit_name, isActive, original_date_created, blob_col) '
+                                 'values (\'Oz\', false, \'2020-07-23 10:00:00\', \'blob content\');')
+        self.run_query_tap_mysql('ALTER table weight_unit change column bool_col is_imperial bool;')
+        self.run_query_tap_mysql('UPDATE weight_unit SET is_imperial = false WHERE weight_unit_name like \'%oz%\'')
+
+        self.run_query_tap_mysql('INSERT INTO edgydata (c_varchar, `group`, `case`, cjson, c_time) VALUES'
+                                 '(\'Lorem ipsum dolor sit amet\', 10, \'A\', \'[]\', \'00:00:00\'),'
+                                 '(\'Thai: แผ่นดินฮั่นเสื่อมโทรมแสนสังเวช\', 20, \'A\', \'{}\', \'12:00:59\'),'
+                                 '(\'Chinese: 和毛泽东 <<重上井冈山>>. 严永欣, 一九八八年.\', null,\'B\', '
+                                 '\'[{"key": "ValueOne", "actions": []}, {"key": "ValueTwo", "actions": []}]\','
+                                 ' \'9:1:00\'),'
+                                 '(\'Special Characters: [\"\\,''!@£$%^&*()]\\\\\', null, \'B\', '
+                                 'null, \'12:00:00\'),'
+                                 '(\'	\', 20, \'B\', null, \'15:36:10\')')
+
         #  INCREMENTAL
         self.run_query_tap_mysql('INSERT INTO address(isactive, street_number, date_created, date_updated,'
                                  ' supplier_supplier_id, zip_code_zip_code_id)'
@@ -82,9 +104,27 @@ class TestTargetPostgres:
         self.run_query_tap_mysql('DELETE FROM no_pk_table WHERE id > 10')
 
         # 3. Run tap second time - both fastsync and a singer should be triggered, there are some FULL_TABLE
-        assertions.assert_run_tap_success(TAP_MARIADB_ID, TARGET_ID, ['fastsync', 'singer'])
+        assertions.assert_run_tap_success(tap_mariadb_id, TARGET_ID, ['fastsync', 'singer'])
         assertions.assert_row_counts_equal(self.run_query_tap_mysql, self.run_query_target_postgres)
-        assertions.assert_all_columns_exist(self.run_query_tap_mysql, self.e2e.run_query_target_postgres)
+        assertions.assert_all_columns_exist(self.run_query_tap_mysql, self.run_query_target_postgres,
+                                            mysql_to_postgres.tap_type_to_target_type, {'blob_col'})
+
+    @pytest.mark.dependency(depends=['import_config'])
+    def test_resync_mariadb_to_pg(self, tap_mariadb_id=TAP_MARIADB_ID):
+        """Resync tables from MariaDB to Postgres DWH"""
+        # 1. Run tap first time - both fastsync and a singer should be triggered
+        assertions.assert_resync_tables_success(tap_mariadb_id, TARGET_ID)
+        assertions.assert_row_counts_equal(self.run_query_tap_mysql, self.run_query_target_postgres)
+        assertions.assert_all_columns_exist(self.run_query_tap_mysql, self.run_query_target_postgres,
+                                            mysql_to_postgres.tap_type_to_target_type)
+
+    # pylint: disable=invalid-name
+    @pytest.mark.dependency(depends=['import_config'])
+    def test_replicate_mariadb_to_pg_with_custom_buffer_size(self):
+        """Replicate data from MariaDB to Postgres DWH with custom buffer size
+        Same tests cases as test_replicate_mariadb_to_pg but using another tap with custom stream buffer size"""
+        self.test_resync_mariadb_to_pg(tap_mariadb_id=TAP_MARIADB_BUFFERED_STREAM_ID)
+
 
     @pytest.mark.dependency(depends=['import_config'])
     def test_replicate_pg_to_pg(self):
@@ -92,10 +132,19 @@ class TestTargetPostgres:
         # 1. Run tap first time - both fastsync and a singer should be triggered
         assertions.assert_run_tap_success(TAP_POSTGRES_ID, TARGET_ID, ['fastsync', 'singer'])
         assertions.assert_row_counts_equal(self.run_query_tap_postgres, self.run_query_target_postgres)
-        assertions.assert_all_columns_exist(self.run_query_tap_postgres, self.e2e.run_query_target_postgres)
+        assertions.assert_all_columns_exist(self.run_query_tap_postgres, self.run_query_target_postgres)
+        assertions.assert_date_column_naive_in_target(self.run_query_target_postgres,
+                                                      'updated_at',
+                                                      'ppw_e2e_tap_postgres."table_with_space and uppercase"')
 
         # 2. Make changes in pg source database
-        #  LOG_BASED - Missing due to some changes that's required in tap-postgres to test it automatically
+        #  LOG_BASED
+        self.run_query_tap_postgres('insert into public."table_with_space and UPPERCase" (cvarchar, updated_at) values '
+                                    "('M', '2020-01-01 08:53:56.8+10'),"
+                                    "('N', '2020-12-31 12:59:00.148+00'),"
+                                    "('O', null),"
+                                    "('P', '2020-03-03 12:30:00');")
+
         #  INCREMENTAL
         self.run_query_tap_postgres('INSERT INTO public.city (id, name, countrycode, district, population) '
                                     "VALUES (4080, 'Bath', 'GBR', 'England', 88859)")
@@ -106,10 +155,24 @@ class TestTargetPostgres:
         #  FULL_TABLE
         self.run_query_tap_postgres("DELETE FROM public.country WHERE code = 'UMI'")
 
+        #  LOG_BASED
+        self.run_query_tap_postgres('ALTER TABLE logical1.logical1_table1 ADD COLUMN bool_col bool;')
+        self.run_query_tap_postgres('ALTER TABLE logical1.logical1_table1 RENAME COLUMN cvarchar2 to varchar_col;')
+        self.run_query_tap_postgres('INSERT INTO logical1.logical1_table1 (cvarchar, varchar_col, bool_col) values '
+                                    '(\'insert after alter table\', \'this is renamed column\', true);')
+
         # 3. Run tap second time - both fastsync and a singer should be triggered, there are some FULL_TABLE
         assertions.assert_run_tap_success(TAP_POSTGRES_ID, TARGET_ID, ['fastsync', 'singer'])
         assertions.assert_row_counts_equal(self.run_query_tap_postgres, self.run_query_target_postgres)
-        assertions.assert_all_columns_exist(self.run_query_tap_postgres, self.e2e.run_query_target_postgres)
+        assertions.assert_all_columns_exist(self.run_query_tap_postgres, self.run_query_target_postgres)
+        assertions.assert_date_column_naive_in_target(self.run_query_target_postgres,
+                                                      'updated_at',
+                                                      'ppw_e2e_tap_postgres."table_with_space and uppercase"')
+
+        result = self.run_query_target_postgres(
+            'SELECT updated_at FROM ppw_e2e_tap_postgres."table_with_space and uppercase" where cvarchar=\'M\';')[0][0]
+
+        assert result == datetime(2019, 12, 31, 22, 53, 56, 800000)
 
     @pytest.mark.dependency(depends=['import_config'])
     def test_replicate_s3_to_pg(self):
@@ -185,7 +248,7 @@ class TestTargetPostgres:
 
         result_update = self.mongodb_con.my_collection.update_many({}, {'$set': {'id': 0}})
 
-        assertions.assert_run_tap_success(TAP_MONGODB_ID, TARGET_ID, ['fastsync', 'singer'])
+        assertions.assert_run_tap_success(TAP_MONGODB_ID, TARGET_ID, ['singer'])
 
         assert result_update.modified_count == self.run_query_target_postgres(
             'select count(_id) from ppw_e2e_tap_mongodb.my_collection where cast(document->>\'id\' as int) = 0')[0][0]

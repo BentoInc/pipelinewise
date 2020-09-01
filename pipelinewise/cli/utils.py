@@ -7,14 +7,12 @@ import json
 import logging
 import os
 import re
-import shlex
 import sys
 import tempfile
 import jsonschema
 import yaml
 
 from datetime import date, datetime
-from subprocess import PIPE, STDOUT, Popen
 from ansible.errors import AnsibleError
 from ansible.module_utils._text import to_text
 from ansible.module_utils.common._collections_compat import Mapping
@@ -52,15 +50,6 @@ class AnsibleJSONEncoder(json.JSONEncoder):
             # use default encoder
             value = super(AnsibleJSONEncoder, self).default(o)
         return value
-
-
-class RunCommandException(Exception):
-    """
-    Custom exception to raise when run command fails
-    """
-
-    def __init__(self, *args, **kwargs):
-        Exception.__init__(self, *args, **kwargs)
 
 
 def is_json(string):
@@ -278,7 +267,7 @@ def get_sample_file_paths():
     Get list of every available sample files (YAML, etc.) with absolute paths
     """
     samples_dir = os.path.join(os.path.dirname(__file__), 'samples')
-    return search_files(samples_dir, patterns=['*.yml.sample', 'README.md'], abs_path=True)
+    return search_files(samples_dir, patterns=['config.yml', '*.yml.sample', 'README.md'], abs_path=True)
 
 
 def validate(instance, schema):
@@ -462,71 +451,6 @@ def get_fastsync_bin(venv_dir, tap_type, target_type):
     return os.path.join(venv_dir, 'pipelinewise', 'bin', fastsync_name)
 
 
-def run_command(command, log_file=None, line_callback=None):
-    """
-    Runs a shell command with or without log file with STDOUT and STDERR
-    """
-    piped_command = f"/bin/bash -o pipefail -c '{command}'"
-    LOGGER.debug('Running command %s', piped_command)
-
-    # Logfile is needed: Continuously polling STDOUT and STDERR and writing into a log file
-    # Once the command finished STDERR redirects to STDOUT and returns _only_ STDOUT
-    if log_file is not None:
-        LOGGER.info('Writing output into %s', log_file)
-
-        # Create log dir if not exists
-        os.makedirs(os.path.dirname(log_file), exist_ok=True)
-
-        # Status embedded in the log file name
-        log_file_running = f'{log_file}.running'
-        log_file_failed = f'{log_file}.failed'
-        log_file_success = f'{log_file}.success'
-
-        # Start command
-        proc = Popen(shlex.split(piped_command), stdout=PIPE, stderr=STDOUT)
-        with open(log_file_running, 'w+') as logfile:
-            stdout = ''
-            while True:
-                line = proc.stdout.readline()
-                if line:
-                    decoded_line = line.decode('utf-8')
-
-                    if line_callback is not None:
-                        decoded_line = line_callback(decoded_line)
-
-                    stdout += decoded_line
-
-                    logfile.write(decoded_line)
-                    logfile.flush()
-                if proc.poll() is not None:
-                    break
-
-        proc_rc = proc.poll()
-        if proc_rc != 0:
-            # Add failed status to the log file name
-            os.rename(log_file_running, log_file_failed)
-
-            # Raise run command exception
-            raise RunCommandException(f'Command failed. Return code: {proc_rc}')
-
-        # Add success status to the log file name
-        os.rename(log_file_running, log_file_success)
-
-        return [proc_rc, stdout, None]
-
-    # No logfile needed: STDOUT and STDERR returns in an array once the command finished
-    proc = Popen(shlex.split(piped_command), stdout=PIPE, stderr=PIPE)
-    proc_tuple = proc.communicate()
-    proc_rc = proc.returncode
-    stdout = proc_tuple[0].decode('utf-8')
-    stderr = proc_tuple[1].decode('utf-8')
-
-    if proc_rc != 0:
-        LOGGER.error(stderr)
-
-    return [proc_rc, stdout, stderr]
-
-
 # pylint: disable=redefined-builtin
 def create_temp_file(suffix=None, prefix=None, dir=None, text=None):
     """
@@ -542,3 +466,48 @@ def env_var_constructor(loader, node):
     env_var, remaining_path = ENV_VAR_PATTERN.match(value).groups()
 
     return os.environ[env_var] + remaining_path
+
+    
+def find_errors_in_log_file(file, max_errors=10, error_pattern=None):
+    """
+    Find error lines in a log file
+
+    Args:
+        file: file to read
+        max_errors: max number of errors to find
+        error_pattern: Custom exception pattern
+
+    Returns:
+        List of error messages found in the file
+    """
+    # List of known exception patterns in logs
+    known_error_patterns = re.compile(
+        # PPW error log patterns
+        r'CRITICAL|'
+        r'EXCEPTION|'
+        r'ERROR|'
+        # Basic tap and target connector exception patterns
+        r'pymysql\.err|'
+        r'psycopg2\.*Error|'
+        r'snowflake\.connector\.errors|'
+        r'botocore\.exceptions\.|'
+        # Generic python exceptions
+        r'\.[E|e]xception|'
+        r'\.[E|e]rror')
+
+    # Use known error patterns by default
+    if not error_pattern:
+        error_pattern = re.compile(known_error_patterns)
+
+    errors = []
+    if file and os.path.isfile(file):
+        with open(file) as file_object:
+            for line in file_object:
+                if len(re.findall(error_pattern, line)) > 0:
+                    errors.append(line)
+
+                    # Seek to the end of the file, if max_errors found
+                    if len(errors) >= max_errors:
+                        file_object.seek(0, 2)
+
+    return errors

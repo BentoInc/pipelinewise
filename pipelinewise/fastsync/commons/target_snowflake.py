@@ -27,11 +27,29 @@ class FastSyncTargetSnowflake:
     def __init__(self, connection_config, transformation_config=None):
         self.connection_config = connection_config
         self.transformation_config = transformation_config
-        self.s3 = boto3.client('s3',
-                               aws_access_key_id=self.connection_config.get('aws_access_key_id'),
-                               aws_secret_access_key=self.connection_config.get('aws_secret_access_key'),
-                               aws_session_token=self.connection_config.get('aws_session_token')
-                               )
+
+        # Get the required parameters from config file and/or environment variables
+        aws_profile = self.connection_config.get('aws_profile') or os.environ.get('AWS_PROFILE')
+        aws_access_key_id = self.connection_config.get('aws_access_key_id') or os.environ.get('AWS_ACCESS_KEY_ID')
+        aws_secret_access_key = self.connection_config.get('aws_secret_access_key') or \
+                                os.environ.get('AWS_SECRET_ACCESS_KEY')
+        aws_session_token = self.connection_config.get('aws_session_token') or os.environ.get('AWS_SESSION_TOKEN')
+
+        # AWS credentials based authentication
+        if aws_access_key_id and aws_secret_access_key:
+            aws_session = boto3.session.Session(
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                aws_session_token=aws_session_token
+            )
+        # AWS Profile based authentication
+        else:
+            aws_session = boto3.session.Session(profile_name=aws_profile)
+
+        # Create the s3 client
+        self.s3 = aws_session.client('s3',
+                                     region_name=self.connection_config.get('s3_region_name'),
+                                     endpoint_url=self.connection_config.get('s3_endpoint_url'))
 
     def open_connection(self):
         return snowflake.connector.connect(user=self.connection_config['user'],
@@ -39,7 +57,11 @@ class FastSyncTargetSnowflake:
                                            account=self.connection_config['account'],
                                            database=self.connection_config['dbname'],
                                            warehouse=self.connection_config['warehouse'],
-                                           autocommit=True)
+                                           autocommit=True,
+                                           session_parameters={
+                                               # Quoted identifiers should be case sensitive
+                                               'QUOTED_IDENTIFIERS_IGNORE_CASE': 'FALSE'
+                                           })
 
     def query(self, query, params=None):
         LOGGER.debug('Running query: %s', query)
@@ -54,6 +76,7 @@ class FastSyncTargetSnowflake:
 
     def upload_to_s3(self, file, table, tmp_dir=None):
         bucket = self.connection_config['s3_bucket']
+        s3_acl = self.connection_config.get('s3_acl')
         s3_key_prefix = self.connection_config.get('s3_key_prefix', '')
         s3_key = '{}pipelinewise_{}_{}.csv.gz'.format(s3_key_prefix, table, time.strftime('%Y%m%d-%H%M%S'))
 
@@ -76,19 +99,22 @@ class FastSyncTargetSnowflake:
             )
 
             # Upload to s3
+            extra_args = {'ACL': s3_acl} if s3_acl else dict()
+
             # Send key and iv in the metadata, that will be required to decrypt and upload the encrypted file
-            metadata = {
+            extra_args['Metadata'] = {
                 'x-amz-key': encryption_metadata.key,
                 'x-amz-iv': encryption_metadata.iv
             }
-            self.s3.upload_file(encrypted_file, bucket, s3_key, ExtraArgs={'Metadata': metadata})
+            self.s3.upload_file(encrypted_file, bucket, s3_key, ExtraArgs=extra_args)
 
             # Remove the uploaded encrypted file
             os.remove(encrypted_file)
 
         # Upload to S3 without encrypting
         else:
-            self.s3.upload_file(file, bucket, s3_key)
+            extra_args = {'ACL': s3_acl} if s3_acl else None
+            self.s3.upload_file(file, bucket, s3_key, ExtraArgs=extra_args)
 
         return s3_key
 

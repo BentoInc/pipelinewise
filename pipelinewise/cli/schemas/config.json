@@ -1,0 +1,49 @@
+{
+  "definitions": {
+    "alert_slack": {
+      "type": "object",
+      "properties": {
+        "token": {
+          "type": "string"
+        },
+        "channel": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "token",
+        "channel"
+      ],
+      "additionalProperties": false
+    },
+    "alert_victorops": {
+      "type": "object",
+      "properties": {
+        "base_url": {
+          "type": "string"
+        },
+        "routing_key": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "base_url",
+        "routing_key"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "type": ["object", "null"],
+  "properties": {
+    "alert_handlers": {
+      "type": ["object", "null"],
+      "properties": {
+        "slack": { "$ref": "#/definitions/alert_slack" },
+        "victorops": { "$ref": "#/definitions/alert_victorops" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}

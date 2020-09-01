@@ -32,6 +32,7 @@ Example YAML for tap-snowflake:
     name: "Sample Snowflake Database Tap"  # Name of the tap
     type: "tap-snowflake"                  # !! THIS SHOULD NOT CHANGE !!
     owner: "somebody@foo.com"              # Data owner to contact
+    #send_alert: False                     # Optional: Disable all configured alerts on this tap
 
 
     # ------------------------------------------------------------------------------
@@ -51,6 +52,7 @@ Example YAML for tap-snowflake:
     # ------------------------------------------------------------------------------
     target: "snowflake"                    # ID of the target connector where the data will be loaded
     batch_size_rows: 20000                 # Batch size for the stream to optimise load performance
+    stream_buffer_size: 0                  # In-memory buffer size (MB) between taps and targets for asynchronous data pipes
 
 
     # ------------------------------------------------------------------------------
