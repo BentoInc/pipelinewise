@@ -10,15 +10,17 @@ Snowflake setup requirements
 
 .. warning::
 
-  You need to create two objects in a Snowflake schema before start replicating data to Snowflake:
+  You need to create a few objects in a Snowflake schema before start replicating data to Snowflake:
    * **Named External Stage**: to upload the CSV files to S3 and to MERGE data into snowflake tables.
    * **Named File Format**: to run MERGE/COPY commands and to parse the CSV files correctly
+   * **A Role**: to grant all the required permissions
+   * **A User**: to run PipelineWise
 
 1. Create a named external stage object on S3:
 
 .. code-block:: bash
 
-    CREATE STAGE {schema}.{stage_name}
+    CREATE STAGE {database}.{schema}.{stage_name}
     url='s3://{s3_bucket}'
     credentials=(AWS_KEY_ID='{aws_key_id}' AWS_SECRET_KEY='{aws_secret_key}')
     encryption=(MASTER_KEY='{client_side_encryption_master_key}');
@@ -33,12 +35,39 @@ Snowflake setup requirements
 
 .. code-block:: bash
 
-    CREATE file format IF NOT EXISTS {schema}.{file_format_name}
-    type = 'CSV' escape='\\' field_optionally_enclosed_by='"';
+    CREATE FILE FORMAT {database}.{schema}.{file_format_name}
+    TYPE = 'CSV' ESCAPE='\\' FIELD_OPTIONALLY_ENCLOSED_BY='"';
 
-3. Create a Snowflake user with permissions to create new schemas and tables in a
-Snowflake database.
+3. Create a Role with all the required permissions:
 
+.. code-block:: bash
+
+    CREATE OR REPLACE ROLE ppw_target_snowflake;
+    GRANT USAGE ON DATABASE {database} TO ROLE ppw_target_snowflake;
+    GRANT CREATE SCHEMA ON DATABASE {database} TO ROLE ppw_target_snowflake;
+
+    GRANT USAGE ON SCHEMA {database}.{schema} TO role ppw_target_snowflake;
+    GRANT USAGE ON STAGE {database}.{schema}.{stage_name} TO ROLE ppw_target_snowflake;
+    GRANT USAGE ON FILE FORMAT {database}.{schema}.{file_format_name} TO ROLE ppw_target_snowflake;
+    GRANT USAGE ON WAREHOUSE {warehouse} TO ROLE ppw_target_snowflake;
+
+Replace ``database``, ``schema``, ``warehouse``, ``stage_name`` and ``file_format_name``
+between ``{`` and ``}`` characters to the actual values from point 1 and 2.
+
+
+4. Create a user and grant permission to the role:
+
+.. code-block:: bash
+
+    CREATE OR REPLACE USER {user}
+    PASSWORD = '{password}'
+    DEFAULT_ROLE = ppw_target_snowflake
+    DEFAULT_WAREHOUSE = '{warehouse}'
+    MUST_CHANGE_PASSWORD = FALSE;
+
+    GRANT ROLE ppw_target_snowflake TO USER {user};
+
+Replace ``warehouse`` between ``{`` and ``}`` characters to the actual values from point 3.
 
 Configuring where to replicate data
 '''''''''''''''''''''''''''''''''''
@@ -71,12 +100,20 @@ Example YAML for target-snowflake:
       password: "<PASSWORD>"                        # Plain string or vault encrypted
       warehouse: "<WAREHOUSE>"                      # Snowflake virtual warehouse
 
-      # We use an intermediate external stage on S3 to load data into Snowflake
-      aws_access_key_id: "<ACCESS_KEY>"             # S3 - Plain string or vault encrypted - If not provided, AWS_ACCESS_KEY_ID environment variable or IAM role will be used
-      aws_secret_access_key: "<SECRET_ACCESS_KEY>"  # S3 - Plain string or vault encrypted - If not provided, AWS_SECRET_ACCESS_KEY environment variable or IAM role will be used
-      #aws_session_token: "<SESSION_TOKEN>"         # S3 - Plain string or vault encrypted - If not provided, AWS_SESSION_TOKEN environment variable or IAM role will be used
+      # We use an external stage on S3 to load data into Snowflake
+      # S3 Profile based authentication
+      aws_profile: "<AWS_PROFILE>"                  # AWS profile name, if not provided, the AWS_PROFILE environment variable or the 'default' profile will be used
+
+      # S3 Non-profile based authentication
+      #aws_access_key_id: "<ACCESS_KEY>"            # Plain string or vault encrypted. Required for non-profile based auth. If not provided, AWS_ACCESS_KEY_ID environment variable will be used.
+      #aws_secret_access_key: "<SECRET_ACCESS_KEY"  # Plain string or vault encrypted. Required for non-profile based auth. If not provided, AWS_SECRET_ACCESS_KEY environment variable will be used.
+      #aws_session_token: "<AWS_SESSION_TOKEN>"     # Optional: Plain string or vault encrypted. If not provided, AWS_SESSION_TOKEN environment variable will be used.
+
+      #aws_endpoint_url: "<FULL_ENDPOINT_URL>"      # Optional: for non AWS S3, for example https://nyc3.digitaloceanspaces.com
+
       s3_bucket: "<BUCKET_NAME>"                    # S3 external stbucket name
       s3_key_prefix: "snowflake-imports/"           # Optional: S3 key prefix
+      #s3_acl: "<S3_OBJECT_ACL>"                    # Optional: Assign the canned ACL to the uploaded file on S3
 
       # stage and file_format are pre-created objects in Snowflake that requires to load and
       # merge data correctly from S3 to tables in one step without using temp tables

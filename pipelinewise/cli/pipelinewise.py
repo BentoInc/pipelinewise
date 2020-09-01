@@ -8,6 +8,7 @@ import signal
 import sys
 import json
 import copy
+import psutil
 import pidfile
 
 from datetime import datetime
@@ -17,7 +18,11 @@ from joblib import Parallel, delayed, parallel_backend
 from tabulate import tabulate
 
 from . import utils
+from . import commands
+from .commands import TapParams, TargetParams, TransformParams
 from .config import Config
+from .alert_sender import AlertSender
+from .alert_handlers.base_alert_handler import BaseAlertHandler
 
 
 # pylint: disable=too-many-lines,too-many-instance-attributes,too-many-public-methods
@@ -39,6 +44,7 @@ class PipelineWise:
         self.pipelinewise_bin = os.path.join(self.venv_dir, 'cli', 'bin', 'pipelinewise')
         self.config_path = os.path.join(self.config_dir, 'config.json')
         self.load_config()
+        self.alert_sender = AlertSender(self.config.get('alert_handlers'))
 
         if args.tap != '*':
             self.tap = self.get_tap(args.target, args.tap)
@@ -48,12 +54,35 @@ class PipelineWise:
             self.target = self.get_target(args.target)
             self.target_bin = self.get_connector_bin(self.target['type'])
 
-        self.tranform_field_bin = self.get_connector_bin('transform-field')
+        self.transform_field_bin = self.get_connector_bin('transform-field')
         self.tap_run_log_file = None
 
         # Catch SIGINT and SIGTERM to exit gracefully
         for sig in [signal.SIGINT, signal.SIGTERM]:
             signal.signal(sig, self._exit_gracefully)
+
+    def send_alert(self,
+                   message: str,
+                   level: str = BaseAlertHandler.ERROR,
+                   exc: Exception = None) -> dict:
+        """
+        Send alert messages to every alert handler if sender is not disabled for the tap
+
+        Args:
+            message: the alert message
+            level: alert level
+            exc: optional exception that triggered the alert
+
+        Returns:
+            Dictionary with number of successfully sent alerts
+        """
+        stats = {'sent': 0}
+
+        send_alert = self.tap.get('send_alert', True)
+        if send_alert:
+            stats = self.alert_sender.send_to_all_handlers(message=message, level=level, exc=exc)
+
+        return stats
 
     def create_consumable_target_config(self, target_config, tap_inheritable_config):
         """
@@ -584,7 +613,7 @@ class PipelineWise:
         # We will use the discover option to test connection
         tap_config = self.tap['files']['config']
         command = f'{self.tap_bin} --config {tap_config} --discover'
-        result = utils.run_command(command)
+        result = commands.run_command(command)
 
         # Get output and errors from tap
         # pylint: disable=unused-variable
@@ -628,7 +657,7 @@ class PipelineWise:
 
         # Generate and run the command to run the tap directly
         command = f'{tap_bin} --config {tap_config_file} --discover'
-        result = utils.run_command(command)
+        result = commands.run_command(command)
 
         # Get output and errors from tap
         # pylint: disable=unused-variable
@@ -749,40 +778,17 @@ class PipelineWise:
         print(tabulate(tab_body, headers=tab_headers, tablefmt='simple'))
         print(f'{pipelines} pipeline(s)')
 
-    # pylint: disable=too-many-locals,too-many-arguments
-    def run_tap_singer(self, tap_type, tap_config, tap_properties, tap_state, tap_transformation, target_config):
+    def run_tap_singer(self, tap: TapParams, target: TargetParams, transform: TransformParams,
+                       stream_buffer_size: int = 0) -> str:
         """
-        Generating and running piped shell command to sync tables using singer taps and targets
+        Generate and run piped shell command to sync tables using singer taps and targets
         """
-        # Following the singer spec the catalog JSON file needs to be passed by the --catalog argument
-        # However some tap (i.e. tap-mysql and tap-postgres) requires it as --properties
-        # This is probably for historical reasons and need to clarify on Singer slack channels
-        tap_catalog_argument = utils.get_tap_property_by_tap_type(tap_type, 'tap_catalog_argument')
-
-        # Add state argument if exists to extract data incrementally
-        tap_state_arg = ''
-        if os.path.isfile(tap_state):
-            tap_state_arg = f'--state {tap_state}'
-
-        # Detect if transformation is needed
-        has_transformation = False
-        if os.path.isfile(tap_transformation):
-            trans = utils.load_json(tap_transformation)
-            if 'transformations' in trans and len(trans['transformations']) > 0:
-                has_transformation = True
-
-        # Run without transformation in the middle
-        if not has_transformation:
-            command = ' '.join(
-                (f'  {self.tap_bin} --config {tap_config} {tap_catalog_argument} {tap_properties} {tap_state_arg}',
-                 f'| {self.target_bin} --config {target_config}'))
-
-        # Run with transformation in the middle
-        else:
-            command = ' '.join(
-                (f'  {self.tap_bin} --config {tap_config} {tap_catalog_argument} {tap_properties} {tap_state_arg}',
-                 f'| {self.tranform_field_bin} --config {tap_transformation}',
-                 f'| {self.target_bin} --config {target_config}'))
+        # Build the piped executable command
+        command = commands.build_singer_command(tap=tap,
+                                                target=target,
+                                                transform=transform,
+                                                stream_buffer_size=stream_buffer_size,
+                                                stream_buffer_log_file=self.tap_run_log_file)
 
         # Do not run if another instance is already running
         log_dir = os.path.dirname(self.tap_run_log_file)
@@ -803,7 +809,7 @@ class PipelineWise:
                 nonlocal start, state
 
                 if start is None or time() - start >= 2:
-                    with open(tap_state, 'w') as state_file:
+                    with open(tap.state, 'w') as state_file:
                         state_file.write(line)
 
                     # Update start time to be the current time.
@@ -822,39 +828,26 @@ class PipelineWise:
 
         # Run command with update_state_file as a callback to call for every stdout line
         if self.extra_log:
-            utils.run_command(command, self.tap_run_log_file, update_state_file_with_extra_log)
+            commands.run_command(command, self.tap_run_log_file, update_state_file_with_extra_log)
         else:
-            utils.run_command(command, self.tap_run_log_file, update_state_file)
+            commands.run_command(command, self.tap_run_log_file, update_state_file)
 
         # update the state file one last time to make sure it always has the last state message.
         if state is not None:
-            with open(tap_state, 'w') as statefile:
+            with open(tap.state, 'w') as statefile:
                 statefile.write(state)
 
-    # pylint: disable=too-many-arguments
-    def run_tap_fastsync(self, tap_type, target_type, tap_config, tap_properties, tap_state, tap_transformation,
-                         target_config):
+    def run_tap_fastsync(self, tap: TapParams, target: TargetParams, transform: TransformParams):
         """
         Generating and running shell command to sync tables using the native fastsync components
         """
-        fastsync_bin = utils.get_fastsync_bin(self.venv_dir, tap_type, target_type)
-
-        # Add state argument if exists to extract data incrementally
-        tap_transform_arg = ''
-        if os.path.isfile(tap_transformation):
-            tap_transform_arg = f'--transform {tap_transformation}'
-
-        tables_command = f'--tables {self.args.tables}' if self.args.tables else ''
-        command = ' '.join((
-            f'  {fastsync_bin} ',
-            f'--tap {tap_config}',
-            f'--properties {tap_properties}',
-            f'--state {tap_state}',
-            f'--target {target_config}',
-            f'--temp_dir {self.get_temp_dir()}',
-            f'{tap_transform_arg}',
-            f'{tables_command}'
-        ))
+        # Build the fastsync executable command
+        command = commands.build_fastsync_command(tap=tap,
+                                                  target=target,
+                                                  transform=transform,
+                                                  venv_dir=self.venv_dir,
+                                                  temp_dir=self.get_temp_dir(),
+                                                  tables=self.args.tables)
 
         # Do not run if another instance is already running
         log_dir = os.path.dirname(self.tap_run_log_file)
@@ -870,10 +863,10 @@ class PipelineWise:
 
         if self.extra_log:
             # Run command and copy fastsync output to main logger
-            utils.run_command(command, self.tap_run_log_file, add_fastsync_output_to_main_logger)
+            commands.run_command(command, self.tap_run_log_file, add_fastsync_output_to_main_logger)
         else:
             # Run command
-            utils.run_command(command, self.tap_run_log_file)
+            commands.run_command(command, self.tap_run_log_file)
 
     # pylint: disable=too-many-statements,too-many-locals
     def run_tap(self):
@@ -895,11 +888,11 @@ class PipelineWise:
                     replication are not using the singer components because
                     they are too slow to sync large tables.
         """
-
         tap_id = self.tap['id']
         tap_type = self.tap['type']
         target_id = self.target['id']
         target_type = self.target['type']
+        stream_buffer_size = self.tap.get('stream_buffer_size', commands.DEFAULT_STREAM_BUFFER_SIZE)
 
         self.logger.info('Running %s tap in %s target', tap_id, target_id)
 
@@ -952,19 +945,18 @@ class PipelineWise:
         start_time = datetime.now()
         try:
             with pidfile.PIDFile(self.tap['files']['pidfile']):
+                target_params = TargetParams(target_type, self.target_bin, cons_target_config)
+                transform_params = TransformParams(self.transform_field_bin, tap_transformation)
+
                 # Run fastsync for FULL_TABLE replication method
                 if len(fastsync_stream_ids) > 0:
                     self.logger.info('Table(s) selected to sync by fastsync: %s', fastsync_stream_ids)
                     self.tap_run_log_file = os.path.join(log_dir, f'{target_id}-{tap_id}-{current_time}.fastsync.log')
-                    self.run_tap_fastsync(
-                        tap_type,
-                        target_type,
-                        tap_config,
-                        tap_properties_fastsync,
-                        tap_state,
-                        tap_transformation,
-                        cons_target_config
-                    )
+                    tap_params = TapParams(tap_type, self.tap_bin, tap_config, tap_properties_fastsync, tap_state)
+
+                    self.run_tap_fastsync(tap=tap_params,
+                                          target=target_params,
+                                          transform=transform_params)
                 else:
                     self.logger.info('No table available that needs to be sync by fastsync')
 
@@ -972,14 +964,12 @@ class PipelineWise:
                 if len(singer_stream_ids) > 0:
                     self.logger.info('Table(s) selected to sync by singer: %s', singer_stream_ids)
                     self.tap_run_log_file = os.path.join(log_dir, f'{target_id}-{tap_id}-{current_time}.singer.log')
-                    self.run_tap_singer(
-                        tap_type,
-                        tap_config,
-                        tap_properties_singer,
-                        tap_state,
-                        tap_transformation,
-                        cons_target_config
-                    )
+                    tap_params = TapParams(tap_type, self.tap_bin, tap_config, tap_properties_singer, tap_state)
+
+                    self.run_tap_singer(tap=tap_params,
+                                        target=target_params,
+                                        transform=transform_params,
+                                        stream_buffer_size=stream_buffer_size)
                 else:
                     self.logger.info('No table available that needs to be sync by singer')
 
@@ -990,18 +980,20 @@ class PipelineWise:
             utils.silentremove(tap_properties_singer)
             sys.exit(1)
         # Delete temp files if there is any
-        except utils.RunCommandException as exc:
+        except commands.RunCommandException as exc:
             self.logger.exception(exc)
             utils.silentremove(cons_target_config)
             utils.silentremove(tap_properties_fastsync)
             utils.silentremove(tap_properties_singer)
             self._print_tap_run_summary(self.STATUS_FAILED, start_time, datetime.now())
+            self.send_alert(message=f'{tap_id} tap failed', exc=exc)
             sys.exit(1)
         except Exception as exc:
             utils.silentremove(cons_target_config)
             utils.silentremove(tap_properties_fastsync)
             utils.silentremove(tap_properties_singer)
             self._print_tap_run_summary(self.STATUS_FAILED, start_time, datetime.now())
+            self.send_alert(message=f'{tap_id} tap failed', exc=exc)
             raise exc
 
         utils.silentremove(cons_target_config)
@@ -1020,9 +1012,17 @@ class PipelineWise:
         pidfile_path = self.tap['files']['pidfile']
         try:
             with open(pidfile_path) as pidf:
-                pid = pidf.read()
-                self.logger.info('Sending SIGINT to pid %s...', pid)
-                os.kill(int(pid), signal.SIGINT)
+                pid = int(pidf.read())
+                parent = psutil.Process(pid)
+
+                # Terminate child processes
+                for child in parent.children(recursive=True):
+                    self.logger.info('Sending SIGINT to child pid %s...', child.pid)
+                    child.send_signal(signal.SIGINT)
+
+                # Terminate main process
+                self.logger.info('Sending SIGINT to main pid %s...', parent.pid)
+                parent.send_signal(signal.SIGINT)
         except ProcessLookupError:
             self.logger.error('Pid %s not found. Is the tap running on this machine? '
                               'Stopping taps remotely is not supported.', pid)
@@ -1087,27 +1087,28 @@ class PipelineWise:
         try:
             with pidfile.PIDFile(self.tap['files']['pidfile']):
                 self.tap_run_log_file = os.path.join(log_dir, f'{target_id}-{tap_id}-{current_time}.fastsync.log')
-                self.run_tap_fastsync(
-                    tap_type,
-                    target_type,
-                    tap_config,
-                    tap_properties,
-                    tap_state,
-                    tap_transformation,
-                    cons_target_config
-                )
+
+                # Create parameters as NamedTuples
+                tap_params = TapParams(tap_type, self.tap_bin, tap_config, tap_properties, tap_state)
+                target_params = TargetParams(target_type, self.target_bin, cons_target_config)
+                transform_params = TransformParams(self.transform_field_bin, tap_transformation)
+                self.run_tap_fastsync(tap=tap_params,
+                                      target=target_params,
+                                      transform=transform_params)
 
         except pidfile.AlreadyRunningError:
             self.logger.error('Another instance of the tap is already running.')
             utils.silentremove(cons_target_config)
             sys.exit(1)
         # Delete temp file if there is any
-        except utils.RunCommandException as exc:
+        except commands.RunCommandException as exc:
             self.logger.exception(exc)
             utils.silentremove(cons_target_config)
+            self.send_alert(message=f'Failed to sync tables in {tap_id} tap', exc=exc)
             sys.exit(1)
         except Exception as exc:
             utils.silentremove(cons_target_config)
+            self.send_alert(message=f'Failed to sync tables in {tap_id} tap', exc=exc)
             raise exc
 
         utils.silentremove(cons_target_config)

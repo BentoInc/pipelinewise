@@ -1,7 +1,7 @@
 import os
 import re
 
-from typing import List
+from typing import List, Set, Union
 from pathlib import Path
 
 from . import tasks
@@ -16,6 +16,16 @@ def assert_run_tap_success(tap, target, sync_engines):
         log_file = tasks.find_run_tap_log_file(stdout, sync_engine)
         assert_command_success(return_code, stdout, stderr, log_file)
         assert_state_file_valid(target, tap, log_file)
+
+
+def assert_resync_tables_success(tap, target):
+    """Resync a specific tap and make sure that it's using the correct sync engine,
+    finished successfully and state file created with the right content"""
+    [return_code, stdout, stderr] = tasks.run_command(f'pipelinewise sync_tables --tap {tap} --target {target}')
+
+    log_file = tasks.find_run_tap_log_file(stdout, 'fastsync')
+    assert_command_success(return_code, stdout, stderr, log_file)
+    assert_state_file_valid(target, tap, log_file)
 
 
 def assert_command_success(return_code, stdout, stderr, log_path=None):
@@ -159,12 +169,20 @@ def assert_row_counts_equal(tap_query_runner_fn: callable, target_query_runner_f
     assert row_counts_in_target == row_counts_in_source
 
 
-def assert_all_columns_exist(tap_query_runner_fn: callable, target_query_runner_fn: callable) -> None:
+# pylint: disable=too-many-locals
+def assert_all_columns_exist(tap_query_runner_fn: callable,
+                             target_query_runner_fn: callable,
+                             column_type_mapper_fn: callable = None,
+                             ignore_cols: Union[Set, List] = None) -> None:
     """Takes two query runner methods, gets the columns list for every table in both the
     source and target database and tests if every column in source exists in the target database.
+    Some taps have unsupported column types and these are not part of the schemas published to the target thus
+    target table doesn't have such columns.
 
     :param tap_query_runner_fn: method to run queries in the first connection
-    :param target_query_runner_fn: method to run queries in the second connection"""
+    :param target_query_runner_fn: method to run queries in the second connection
+    :param column_type_mapper_fn: method to convert source to target column types
+    :param ignore_cols: List or set of columns to ignore if we know target table won't have them"""
     # Generate a map of source and target specific functions
     funcs = _map_tap_to_target_functions(tap_query_runner_fn, target_query_runner_fn)
 
@@ -180,20 +198,75 @@ def assert_all_columns_exist(tap_query_runner_fn: callable, target_query_runner_
     source_table_cols = _run_sql(tap_query_runner_fn, source_sql_get_cols)
     target_table_cols = _run_sql(target_query_runner_fn, target_sql_get_cols)
 
+    def _cols_list_to_dict(cols: List) -> dict:
+        """
+        Converts list of columns with char separators to dictionary
+
+        :param cols: list of ':' separated strings using the format of
+                     column_name:column_type:column_type_extra
+        :return: Dictionary of columns where key is the column_name
+        """
+        cols_dict = {}
+        for col in cols:
+            col_props = col.split(':')
+            cols_dict[col_props[0]] = {
+                'type': col_props[1],
+                'type_extra': col_props[2]
+            }
+
+        return cols_dict
+
     # Compare the two dataset
     for table_cols in source_table_cols:
         table_to_check = table_cols[0].lower()
-        source_cols = table_cols[1].lower().split(',')
+        source_cols = table_cols[1].lower().split(';')
 
         try:
-            target_cols = next(t[1] for t in target_table_cols if t[0].lower() == table_to_check).lower().split(',')
+            target_cols = next(t[1] for t in target_table_cols if t[0].lower() == table_to_check).lower().split(';')
         except StopIteration as ex:
             ex.args += ('Error', f'{table_to_check} table not found in target')
             raise
 
-        for col in source_cols:
+        source_cols_dict = _cols_list_to_dict(source_cols)
+        target_cols_dict = _cols_list_to_dict(target_cols)
+        print(target_cols_dict)
+        for col_name, col_props in source_cols_dict.items():
+            # Check if column exists in the target table
+
+            if ignore_cols and col_name in ignore_cols:
+                continue
+
             try:
-                assert col in target_cols
+                assert col_name in target_cols_dict
             except AssertionError as ex:
-                ex.args += ('Error', f'{col} column not found in target table {table_to_check}')
+                ex.args += ('Error', f'{col_name} column not found in target table {table_to_check}')
                 raise
+
+            # Check if column type is expected in the target table, if mapper function provided
+            if column_type_mapper_fn:
+                try:
+                    target_col = target_cols_dict[col_name]
+                    exp_col_type = column_type_mapper_fn(col_props['type'], col_props['type_extra'])\
+                        .replace(' NULL', '').lower()
+                    act_col_type = target_col['type'].lower()
+                    assert act_col_type == exp_col_type
+                except AssertionError as ex:
+                    ex.args += ('Error', f'{col_name} column type is not as expected. '
+                                         f'Expected: {exp_col_type} '
+                                         f'Actual: {act_col_type}')
+                    raise
+
+def assert_date_column_naive_in_target(target_query_runner_fn, column_name, full_table_name):
+    """
+    Checks if all dates in the given column are naive,i.e no timezone
+    Args:
+        target_query_runner_fn: target query runner callable
+        column_name: column of timestamp type
+        full_table_name: fully qualified table name
+    """
+    dates = target_query_runner_fn(
+        f'SELECT {column_name} FROM {full_table_name};')
+
+    for date in dates:
+        if date[0] is not None:
+            assert date[0].tzinfo is None

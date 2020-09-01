@@ -89,7 +89,8 @@ class TestFastSyncTapMongoDB(TestCase):
 
             call_mock.assert_called_once_with([
                 'mongodump',
-                '--uri', '"mongodb://my_user:secret@foo.com:3306/my_db?authSource=admin"',
+                '--uri', '"mongodb://my_user:secret@foo.com:3306/my_db'
+                         '?authSource=admin&readPreference=secondaryPreferred"',
                 '--forceTableScan',
                 '--gzip',
                 '-c', 'my_col',
@@ -114,7 +115,8 @@ class TestFastSyncTapMongoDB(TestCase):
                 with patch('pipelinewise.fastsync.commons.tap_mongodb.gzip') as gzip_mock:
                     mock_enter = Mock()
 
-                    with patch('pipelinewise.fastsync.commons.tap_mongodb.bson.decode_iter') as bson_decode_iter_mock:
+                    with patch('pipelinewise.fastsync.commons.tap_mongodb.bson.decode_file_iter') as \
+                            bson_decode_iter_mock:
 
                         bson_decode_iter_mock.return_value = [
                             {'_id': ObjectId('0123456789ab0123456789aa'), 'key1': 1, 'key2': time.time()},
@@ -131,7 +133,8 @@ class TestFastSyncTapMongoDB(TestCase):
 
                         call_mock.assert_called_once_with([
                             'mongodump',
-                            '--uri', '"mongodb://my_user:secret@foo.com:3306/my_db?authSource=admin"',
+                            '--uri', '"mongodb://my_user:secret@foo.com:3306/my_db'
+                                     '?authSource=admin&readPreference=secondaryPreferred"',
                             '--forceTableScan',
                             '--gzip',
                             '-c', 'my_col',
@@ -149,8 +152,21 @@ class TestFastSyncTapMongoDB(TestCase):
         """
         cursor_mock = Mock(spec_set=DatabaseChangeStream).return_value
         type(cursor_mock).alive = PropertyMock(return_value=True)
-        type(cursor_mock).resume_token = PropertyMock(side_effect=['token1', 'token2',
-                                                                   'token3', 'token4'])
+        type(cursor_mock).resume_token = PropertyMock(side_effect=[
+            {
+                '_data': 'token1',
+                '_typeBits': b'\x81\x80'
+            },
+            {
+                '_data': 'token2',
+            },
+
+            {
+                '_data': 'token3'
+            },
+            {
+                '_data': 'token4'
+            }])
         cursor_mock.try_next.side_effect = [{}, {}, {}]
 
         mock_enter = Mock()
@@ -164,7 +180,9 @@ class TestFastSyncTapMongoDB(TestCase):
         self.mongo.database.watch.return_value = mock_watch
 
         self.assertDictEqual({
-            'token': 'token1'
+            'token': {
+                '_data': 'token1'
+            }
         }, self.mongo.fetch_current_log_pos())
 
     def test_fetch_current_incremental_key_pos(self):

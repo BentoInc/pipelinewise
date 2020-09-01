@@ -6,6 +6,7 @@ from random import randint
 import bson
 import pytest
 from bson import Timestamp
+from pipelinewise.fastsync import mysql_to_snowflake
 
 from .helpers import tasks
 from .helpers import assertions
@@ -13,6 +14,7 @@ from .helpers.env import E2EEnv
 
 DIR = os.path.dirname(__file__)
 TAP_MARIADB_ID = 'mariadb_to_sf'
+TAP_MARIADB_BUFFERED_STREAM_ID = 'mariadb_to_sf_buffered_stream'
 TAP_POSTGRES_ID = 'postgres_to_sf'
 TAP_MONGODB_ID = 'mongo_to_sf'
 TAP_S3_CSV_ID = 's3_csv_to_sf'
@@ -62,16 +64,27 @@ class TestTargetSnowflake:
         assertions.assert_command_success(return_code, stdout, stderr)
 
     @pytest.mark.dependency(depends=['import_config'])
-    def test_replicate_mariadb_to_sf(self):
+    def test_replicate_mariadb_to_sf(self, tap_mariadb_id=TAP_MARIADB_ID):
         """Replicate data from MariaDB to Snowflake"""
-        # Run tap first time - both fastsync and a singer should be triggered
-        assertions.assert_run_tap_success(TAP_MARIADB_ID, TARGET_ID, ['fastsync', 'singer'])
+        # 1. Run tap first time - both fastsync and a singer should be triggered
+        assertions.assert_run_tap_success(tap_mariadb_id, TARGET_ID, ['fastsync', 'singer'])
         assertions.assert_row_counts_equal(self.run_query_tap_mysql, self.run_query_target_snowflake)
-        assertions.assert_all_columns_exist(self.run_query_tap_mysql, self.e2e.run_query_target_snowflake)
+        assertions.assert_all_columns_exist(self.run_query_tap_mysql, self.e2e.run_query_target_snowflake,
+                                            mysql_to_snowflake.tap_type_to_target_type)
 
         # 2. Make changes in MariaDB source database
         #  LOG_BASED
         self.run_query_tap_mysql('UPDATE weight_unit SET isactive = 0 WHERE weight_unit_id IN (2, 3, 4)')
+        self.run_query_tap_mysql('INSERT INTO edgydata (c_varchar, `group`, `case`, cjson, c_time) VALUES'
+                                 '(\'Lorem ipsum dolor sit amet\', 10, \'A\', \'[]\', \'00:00:00\'),'
+                                 '(\'Thai: แผ่นดินฮั่นเสื่อมโทรมแสนสังเวช\', 20, \'A\', \'{}\', \'12:00:59\'),'
+                                 '(\'Chinese: 和毛泽东 <<重上井冈山>>. 严永欣, 一九八八年.\', null,\'B\', '
+                                 '\'[{"key": "ValueOne", "actions": []}, {"key": "ValueTwo", "actions": []}]\','
+                                 ' \'9:1:00\'),'
+                                 '(\'Special Characters: [\"\\,''!@£$%^&*()]\\\\\', null, \'B\', '
+                                 'null, \'12:00:00\'),'
+                                 '(\'	\', 20, \'B\', null, \'15:36:10\')')
+
         #  INCREMENTAL
         self.run_query_tap_mysql('INSERT INTO address(isactive, street_number, date_created, date_updated,'
                                  ' supplier_supplier_id, zip_code_zip_code_id)'
@@ -82,9 +95,25 @@ class TestTargetSnowflake:
         self.run_query_tap_mysql('DELETE FROM no_pk_table WHERE id > 10')
 
         # 3. Run tap second time - both fastsync and a singer should be triggered, there are some FULL_TABLE
-        assertions.assert_run_tap_success(TAP_POSTGRES_ID, TARGET_ID, ['fastsync', 'singer'])
-        assertions.assert_row_counts_equal(self.run_query_tap_postgres, self.run_query_target_snowflake)
-        assertions.assert_all_columns_exist(self.run_query_tap_mysql, self.e2e.run_query_target_snowflake)
+        assertions.assert_run_tap_success(tap_mariadb_id, TARGET_ID, ['fastsync', 'singer'])
+        assertions.assert_row_counts_equal(self.run_query_tap_mysql, self.run_query_target_snowflake)
+        assertions.assert_all_columns_exist(self.run_query_tap_mysql, self.e2e.run_query_target_snowflake,
+                                            mysql_to_snowflake.tap_type_to_target_type, {'blob_col'})
+
+    @pytest.mark.dependency(depends=['import_config'])
+    def test_resync_mariadb_to_sf(self, tap_mariadb_id=TAP_MARIADB_ID):
+        """Resync tables from MariaDB to Snowflake"""
+        assertions.assert_resync_tables_success(tap_mariadb_id, TARGET_ID)
+        assertions.assert_row_counts_equal(self.run_query_tap_mysql, self.run_query_target_snowflake)
+        assertions.assert_all_columns_exist(self.run_query_tap_mysql, self.run_query_target_snowflake,
+                                            mysql_to_snowflake.tap_type_to_target_type)
+
+    # pylint: disable=invalid-name
+    @pytest.mark.dependency(depends=['import_config'])
+    def test_replicate_mariadb_to_sf_with_custom_buffer_size(self):
+        """Replicate data from MariaDB to Snowflake with custom buffer size
+        Same tests cases as test_replicate_mariadb_to_sf but using another tap with custom stream buffer size"""
+        self.test_replicate_mariadb_to_sf(tap_mariadb_id=TAP_MARIADB_BUFFERED_STREAM_ID)
 
     @pytest.mark.dependency(depends=['import_config'])
     def test_replicate_pg_to_sf(self):
@@ -92,10 +121,18 @@ class TestTargetSnowflake:
         # Run tap first time - both fastsync and a singer should be triggered
         assertions.assert_run_tap_success(TAP_POSTGRES_ID, TARGET_ID, ['fastsync', 'singer'])
         assertions.assert_row_counts_equal(self.run_query_tap_postgres, self.run_query_target_snowflake)
-        assertions.assert_all_columns_exist(self.run_query_tap_postgres, self.e2e.run_query_target_snowflake)
+        assertions.assert_all_columns_exist(self.run_query_tap_postgres, self.run_query_target_snowflake)
+        assertions.assert_date_column_naive_in_target(self.run_query_target_snowflake,
+                                                      'updated_at',
+                                                      'ppw_e2e_tap_postgres."TABLE_WITH_SPACE AND UPPERCASE"')
 
-        # 2. Make changes in MariaDB source database
-        #  LOG_BASED - Missing due to some changes that's required in tap-postgres to test it automatically
+        # 2. Make changes in PG source database
+        #  LOG_BASED
+        self.run_query_tap_postgres('insert into public."table_with_space and UPPERCase" (cvarchar, updated_at) values '
+                                    "('X', '2020-01-01 08:53:56.8+10'),"
+                                    "('Y', '2020-12-31 12:59:00.148+00'),"
+                                    "('Z', null),"
+                                    "('W', '2020-03-03 12:30:00');")
         #  INCREMENTAL
         self.run_query_tap_postgres('INSERT INTO public.city (id, name, countrycode, district, population) '
                                     "VALUES (4080, 'Bath', 'GBR', 'England', 88859)")
@@ -109,7 +146,16 @@ class TestTargetSnowflake:
         # 3. Run tap second time - both fastsync and a singer should be triggered, there are some FULL_TABLE
         assertions.assert_run_tap_success(TAP_POSTGRES_ID, TARGET_ID, ['fastsync', 'singer'])
         assertions.assert_row_counts_equal(self.run_query_tap_postgres, self.run_query_target_snowflake)
-        assertions.assert_all_columns_exist(self.run_query_tap_postgres, self.e2e.run_query_target_snowflake)
+        assertions.assert_all_columns_exist(self.run_query_tap_postgres, self.run_query_target_snowflake)
+        assertions.assert_date_column_naive_in_target(self.run_query_target_snowflake,
+                                                      'updated_at',
+                                                      'ppw_e2e_tap_postgres."TABLE_WITH_SPACE AND UPPERCASE"')
+
+
+        result = self.run_query_target_snowflake(
+            'SELECT updated_at FROM ppw_e2e_tap_postgres."TABLE_WITH_SPACE AND UPPERCASE" where cvarchar=\'X\';')[0][0]
+
+        assert result == datetime(2019, 12, 31, 22, 53, 56, 800000)
 
     @pytest.mark.dependency(depends=['import_config'])
     def test_replicate_s3_to_sf(self):
@@ -185,7 +231,7 @@ class TestTargetSnowflake:
 
         result_update = self.mongodb_con.my_collection.update_many({}, {'$set': {'id': 0}})
 
-        assertions.assert_run_tap_success(TAP_MONGODB_ID, TARGET_ID, ['fastsync', 'singer'])
+        assertions.assert_run_tap_success(TAP_MONGODB_ID, TARGET_ID, ['singer'])
 
         assert result_update.modified_count == self.run_query_target_snowflake(
             'select count(_id) from ppw_e2e_tap_mongodb.my_collection where document:id = 0')[0][0]

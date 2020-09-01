@@ -130,6 +130,7 @@ Example YAML for ``tap-postgres``:
     name: "Sample Postgres Database"       # Name of the tap
     type: "tap-postgres"                   # !! THIS SHOULD NOT CHANGE !!
     owner: "somebody@foo.com"              # Data owner to contact
+    #send_alert: False                     # Optional: Disable all configured alerts on this tap
 
 
     # ------------------------------------------------------------------------------
@@ -144,6 +145,15 @@ Example YAML for ``tap-postgres``:
       #filter_schemas: "schema1,schema2"   # Optional: Scan only the required schemas
                                            #           to improve the performance of
                                            #           data extraction
+      #max_run_seconds                     # Optional: Stop running the tap after certain
+                                           #           number of seconds
+                                           #           Default: 43200
+      #logical_poll_total_seconds:         # Optional: Stop running the tap when no data
+                                           #           received from wal after certain number of seconds
+                                           #           Default: 10800
+      #break_at_end_lsn:                   # Optional: Stop running the tap if the newly received lsn
+                                           #           is after the max lsn that was detected when the tap started
+                                           #           Default: true
 
 
     # ------------------------------------------------------------------------------
@@ -152,6 +162,7 @@ Example YAML for ``tap-postgres``:
     # ------------------------------------------------------------------------------
     target: "snowflake"                    # ID of the target connector where the data will be loaded
     batch_size_rows: 20000                 # Batch size for the stream to optimise load performance
+    stream_buffer_size: 0                  # In-memory buffer size (MB) between taps and targets for asynchronous data pipes
 
 
     # ------------------------------------------------------------------------------

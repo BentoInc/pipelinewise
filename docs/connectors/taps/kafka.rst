@@ -40,6 +40,7 @@ Example YAML for ``tap-kafka``:
     name: "Kafka Topic with sample data"   # Name of the tap
     type: "tap-kafka"                      # !! THIS SHOULD NOT CHANGE !!
     owner: "somebody@foo.com"              # Data owner to contact
+    #send_alert: False                     # Optional: Disable all configured alerts on this tap
 
 
     # ------------------------------------------------------------------------------
@@ -54,20 +55,25 @@ Example YAML for ``tap-kafka``:
       # --------------------------------------------------------------------------
       # Optionally you can define primary key(s) from the kafka JSON messages.
       # If primary keys defined then extra column(s) will be added to the output
-      # singer stream with the extracted values by JSONPath selectors.
+      # singer stream with the extracted values by /slashed/paths ala XPath selectors.
       # --------------------------------------------------------------------------
       primary_keys:
-         transfer_id: "$.transferMetadata.transferId"
+         transfer_id: "/transferMetadata/transferId"
 
       # --------------------------------------------------------------------------
       # Kafka Consumer optional parameters
       # --------------------------------------------------------------------------
       #max_runtime_ms: 300000                   # The maximum time for the tap to collect new messages from Kafka topic.
-      #consumer_timeout_ms: 10000               # Number of milliseconds to block during message iteration before raising StopIteration
-      #session_timeout_ms: 30000                # The timeout used to detect failures when using Kafka’s group management facilities.
-      #heartbeat_interval_ms: 10000             # The expected time in milliseconds between heartbeats to the consumer coordinator when using Kafka’s group management facilities.
-      #max_poll_interval_ms: 300000             # The maximum delay between invocations of poll() when using consumer group management.
+      #consumer_timeout_ms: 10000               # KafkaConsumer setting. Number of milliseconds to block during message iteration before raising StopIteration
+      #session_timeout_ms: 30000                # KafkaConsumer setting. The timeout used to detect failures when using Kafka’s group management facilities.
+      #heartbeat_interval_ms: 10000             # KafkaConsumer setting. The expected time in milliseconds between heartbeats to the consumer coordinator when using Kafka’s group management facilities.
+      #max_poll_interval_ms: 300000             # KafkaConsumer setting. The maximum delay between invocations of poll() when using consumer group management.
+      #max_poll_records: 500                    # KafkaConsumer setting. The maximum number of records returned in a single call to poll().
+
+      #commit_interval_ms: 5000                 # Number of milliseconds between two commits. This is different than the kafka auto commit feature. Tap-kafka sends commit messages automatically but only when the data consumed successfully and persisted to local store.
       #local_store_dir: ./tap-kafka-local-store # Path to the local store with consumed kafka messages
+      #local_store_batch_size_rows: 1000        # Number of messages to write to disk in one go. This can avoid high I/O issues when messages written to local store disk too frequently.
+
 
     # ------------------------------------------------------------------------------
     # Destination (Target) - Target properties
@@ -75,6 +81,7 @@ Example YAML for ``tap-kafka``:
     # ------------------------------------------------------------------------------
     target: "snowflake"                       # ID of the target connector where the data will be loaded
     batch_size_rows: 20000                    # Batch size for the stream to optimise load performance
+    stream_buffer_size: 0                     # In-memory buffer size (MB) between taps and targets for asynchronous data pipes
     default_target_schema: "kafka"            # Target schema where the data will be loaded
     default_target_schema_select_permission:  # Optional: Grant SELECT on schema and tables that created
       - grp_stats

@@ -151,11 +151,7 @@ def get_tap_properties(tap=None, temp_dir=None):
             'default_data_flattening_max_level': 0
         },
         'tap-zendesk': {
-            'tap_config_extras': {
-                'rate_limit': 1000,
-                'max_workers': 10,
-                'batch_size': 50
-            },
+            'tap_config_extras': {},
             'tap_stream_id_pattern': '{{table_name}}',
             'tap_stream_name_pattern': '{{table_name}}',
             'tap_catalog_argument': '--catalog',
@@ -228,6 +224,18 @@ def get_tap_properties(tap=None, temp_dir=None):
             'tap_stream_name_pattern': '{{table_name}}',
             'tap_catalog_argument': '--catalog',
             'default_replication_method': 'INCREMENTAL',
+            'default_data_flattening_max_level': 0
+        },
+        'tap-github': {
+            'tap_config_extras': {
+                # Generate unique server id's to avoid broken connection
+                # when multiple taps reading from the same mysql server
+                'server_id': generate_tap_mysql_server_id()
+            },
+            'tap_stream_id_pattern': '{{table_name}}',
+            'tap_stream_name_pattern': '{{table_name}}',
+            'tap_catalog_argument': '--properties',
+            'default_replication_method': 'LOG_BASED',
             'default_data_flattening_max_level': 0
         },
         # Default values to use as a fallback method

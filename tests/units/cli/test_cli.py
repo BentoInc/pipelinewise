@@ -1,14 +1,20 @@
 import os
+import re
+import time
 import shutil
 import signal
+import psutil
+import pidfile
 from pathlib import Path
 
 import pipelinewise.cli as cli
 import pytest
+from unittest.mock import patch
 from tests.units.cli.cli_args import CliArgs
 from pipelinewise.cli.pipelinewise import PipelineWise
 
-CONFIG_DIR = '{}/resources/sample_json_config'.format(os.path.dirname(__file__))
+RESOURCES_DIR = '{}/resources'.format(os.path.dirname(__file__))
+CONFIG_DIR = '{}/sample_json_config'.format(RESOURCES_DIR)
 VIRTUALENVS_DIR = './virtualenvs-dummy'
 TEST_PROJECT_NAME = 'test-project'
 TEST_PROJECT_DIR = '{}/{}'.format(os.getcwd(), TEST_PROJECT_NAME)
@@ -295,6 +301,18 @@ class TestCli:
         with pytest.raises(Exception):
             self.pipelinewise.create_consumable_target_config(target_config, tap_inheritable_config)
 
+    def test_send_alert(self):
+        """Test if alert"""
+        with patch('pipelinewise.cli.alert_sender.AlertSender.send_to_all_handlers') as aler_sender_mock:
+            aler_sender_mock.return_value = {'sent': 1}
+            # Should send alert and should return stats if alerting enabled on the tap
+            self.pipelinewise.tap = self.pipelinewise.get_tap('target_one', 'tap_one')
+            assert self.pipelinewise.send_alert('test-message') == {'sent': 1}
+
+        # Should not send alert and should return none if alerting disabled on the tap
+        self.pipelinewise.tap = self.pipelinewise.get_tap('target_one', 'tap_two')
+        assert self.pipelinewise.send_alert('test-message') == {'sent': 0}
+
     def test_command_encrypt_string(self, capsys):
         """Test vault encryption command output"""
         secret_path = '{}/resources/vault-secret.txt'.format(os.path.dirname(__file__))
@@ -380,6 +398,23 @@ tap_three  tap-mysql     target_two   target-s3-csv     True       not-configure
         assert pytest_wrapped_e.type == SystemExit
         assert pytest_wrapped_e.value.code == 1
 
+        # Stop tap command should stop all the child processes
+        # 1. Start the pipelinewise mock executable that's running
+        #    linux piped dummy tap and target connectors
+        with pidfile.PIDFile(pipelinewise.tap['files']['pidfile']):
+            os.spawnl(os.P_NOWAIT, f'{RESOURCES_DIR}/test_stop_tap/scheduler-mock.sh',
+                      'test_stop_tap/scheduler-mock.sh')
+            # Wait 5 seconds making sure the dummy tap is running
+            time.sleep(5)
+
+            # Send the stop_tap command
+            with pytest.raises(SystemExit):
+                pipelinewise.stop_tap()
+
+        # Should not have any remaining Pipelinewise related linux process
+        for proc in psutil.process_iter(['cmdline']):
+            full_command = ' '.join(proc.info['cmdline'])
+            assert re.match('scheduler|pipelinewise|tap|target', full_command) is None
 
     def test_command_sync_tables(self):
         """Test run tap command"""

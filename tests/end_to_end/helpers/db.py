@@ -33,6 +33,7 @@ def run_query_mysql(query, host, port, user, password, database):
                          user=user,
                          password=password,
                          database=database,
+                         charset='utf8mb4',
                          cursorclass=pymysql.cursors.Cursor) as cur:
         cur.execute(query)
         if cur.rowcount > 0:
@@ -81,7 +82,8 @@ def sql_get_columns_mysql(schemas: list) -> str:
     sql_schemas = ', '.join(f"'{schema}'" for schema in schemas)
 
     return f"""
-    SELECT table_name, GROUP_CONCAT(column_name ORDER BY column_name)
+    SELECT table_name, GROUP_CONCAT(CONCAT(column_name, ':', data_type, ':', column_type)
+                                    ORDER BY column_name SEPARATOR ';')
       FROM information_schema.columns
      WHERE table_schema IN ({sql_schemas})
      GROUP BY table_name
@@ -94,7 +96,7 @@ def sql_get_columns_postgres(schemas: list) -> str:
     sql_schemas = ', '.join(f"'{schema}'" for schema in schemas)
 
     return f"""
-    SELECT table_name, STRING_AGG(column_name, ',' ORDER BY column_name)
+    SELECT table_name, STRING_AGG(CONCAT(column_name, ':', data_type, ':'), ';' ORDER BY column_name)
      FROM information_schema.columns
     WHERE table_schema IN ({sql_schemas})
     GROUP BY table_name
@@ -106,7 +108,8 @@ def sql_get_columns_snowflake(schemas: list) -> str:
     in a specific schema from a snowflake database"""
     sql_schemas = ', '.join(f"'{schema.upper()}'" for schema in schemas)
     return f"""
-    SELECT table_name, LISTAGG(column_name, ',') WITHIN GROUP (ORDER BY column_name)
+    SELECT table_name, LISTAGG(CONCAT(column_name, ':', REPLACE(data_type, 'TEXT', 'VARCHAR'), ':'), ';')
+                       WITHIN GROUP (ORDER BY column_name)
      FROM information_schema.columns
     WHERE table_schema IN ({sql_schemas})
     GROUP BY table_name
@@ -118,7 +121,7 @@ def sql_get_columns_redshift(schemas: list) -> str:
     in a specific schema from a Redshift database"""
     sql_schemas = ', '.join(f"'{schema}'" for schema in schemas)
     return f"""
-    SELECT table_name, LISTAGG(column_name, ',') WITHIN GROUP (ORDER BY column_name)
+    SELECT table_name, LISTAGG(CONCAT(column_name, '::'), ';') WITHIN GROUP (ORDER BY column_name)
     FROM (
         SELECT
             TRIM(c.relname) table_name, a.attname column_name

@@ -29,6 +29,7 @@ db_conn:
 # ------------------------------------------------------------------------------
 target: "postgres_dwh"                 # ID of the target connector where the data will be loaded
 batch_size_rows: 20000                 # Batch size for the stream to optimise load performance
+stream_buffer_size: 0                 # In-memory buffer size (MB) between taps and targets for asynchronous data pipes
 
 
 # ------------------------------------------------------------------------------
@@ -84,4 +85,8 @@ schemas:
 
       ### Table with space and mixed upper and lowercase characters
       - table_name: "table_with_space and UPPERCase"
+        replication_method: "LOG_BASED"
+
+      ### Table with all possible data types
+      - table_name: "all_datatypes"
         replication_method: "LOG_BASED"

@@ -24,6 +24,9 @@
         "s3_key_prefix": {
           "type": "string"
         },
+        "s3_acl": {
+          "type": "string"
+        },
         "stage": {
           "type": "string"
         },
@@ -34,6 +37,12 @@
           "type": "string"
         },
         "aws_secret_access_key": {
+          "type": "string"
+        },
+        "aws_session_token": {
+          "type": "string"
+        },
+        "aws_profile": {
           "type": "string"
         },
         "client_side_encryption_master_key": {
@@ -76,10 +85,19 @@
         "aws_secret_access_key": {
           "type": "string"
         },
+        "aws_session_token": {
+          "type": "string"
+        },
+        "aws_profile": {
+          "type": "string"
+        },
         "s3_bucket": {
           "type": "string"
         },
         "s3_key_prefix": {
+          "type": "string"
+        },
+        "s3_acl": {
           "type": "string"
         }
       },
@@ -89,8 +107,6 @@
         "user",
         "password",
         "dbname",
-        "aws_access_key_id",
-        "aws_secret_access_key",
         "s3_bucket"
       ]
     },
@@ -130,10 +146,19 @@
         "aws_secret_access_key": {
           "type": "string"
         },
+        "aws_session_token": {
+          "type": "string"
+        },
+        "aws_profile": {
+          "type": "string"
+        },
         "s3_bucket": {
           "type": "string"
         },
         "s3_key_prefix": {
+          "type": "string"
+        },
+        "s3_acl": {
           "type": "string"
         },
         "delimiter": {
@@ -144,8 +169,6 @@
         }
       },
       "required": [
-        "aws_access_key_id",
-        "aws_secret_access_key",
         "s3_bucket"
       ]
     }

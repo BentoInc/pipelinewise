@@ -1,3 +1,145 @@
+0.22.0 (2020-08-28)
+-------------------
+
+**FastSync**
+- Fixed an issue when MySQL `TIME` column type mapping was not in sync with target-postgres and target-snowflake `TIME` type mappings
+- Fixed an issue when Postgres `TIMESTAMP WITH TIME ZONE` columns were not mapped correctly to the UTC equivalent data types in the target
+
+**Tap Kafka**
+- Performance improvements
+- Change the syntax of `primary_keys` option from JSONPath to `/slashed/paths` ala XPath
+
+0.21.3 (2020-08-19)
+-------------------
+
+- Fixed an issue when tap was not started if stream buffer size is greater than 1G
+
+0.21.2 (2020-08-18)
+-------------------
+
+- Increase max batch_size_rows to 1000k from 500k
+- Increesa max stream_buffer_size to 2500
+
+0.21.1 (2020-08-05)
+-------------------
+
+**Tap MySQL**
+- Fix two issues when a new discovery is done after detecting new changes in binlogs.
+
+
+0.21.0 (2020-08-04)
+-------------------
+
+- Improve alert messages to include botocore and generic python exception and error patterns in the alerts
+
+**Tap S3 CSV**, **Target Snowflake**, **Target S3 CSV**, **Target Redshift**
+- Add `aws_profile` option to support Profile based authentication to S3
+- Add option to authenticate to S3 using `AWS_PROFILE`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` environment variables
+
+**Target Snowflake**
+- Fixed an issue when target-snowflake was failing when `QUOTED_IDENTIFIERS_IGNORE_CASE` snowflake parameter set to True
+- Fixed an issue when new `SCHEMA` singer message triggered a flush event even if the newly received `SCHEMA` message is the same as the previous one
+- Add `s3_endpoint_url` option to support non-native S3 accounts
+
+**Target S3 CSV**
+- Add `naming_convention` option to create custom and dynamically named files on S3
+
+**Tap Snowflake**
+- Eliminate some warning messages of `optional pandas and/or pyarrow not installed`.
+
+**Tap Zendesk**
+- Fixed and issue when `rate_limit`, `max_workers` and `batch_size` were not configurable via the tap-zendesk YAML file
+
+0.20.2 (2020-07-27)
+-------------------
+
+- Fixed an issue when `stop_tap` command didn't kill running tap and child processes
+
+0.20.1 (2020-07-24)
+-------------------
+
+**Tap MySQL**
+- revert back to `pipelinewise-tap-mysql` to 1.3.2
+    - 1.3.3 is breaking the replication
+
+0.20.0 (2020-07-24)
+-------------------
+
+- Fixed an issue when `stop_tap` command doesn't kill child processes only the parent PPW executable
+
+**Tap MongoDB**
+- Bump `pipelinewise-tap-mongodb` to 1.1.0
+    - Add `await_time_ms` parameter to control how long the log_based method would wait for new change streams before stopping, default is 1000ms=1s which is the default anyway in the server.
+    - Add `update_buffer_size` parameter to control how many update operation we should keep in the memory before having to make a call to `find` operation to get the documents from the server. The default value is 1, i.e every detected update will be sent to stdout right away.
+
+**Tap MySQL**
+- Bump `pipelinewise-tap-mysql` to 1.3.3
+    - During `LOG_BASED` runtime, detect new columns, incl renamed ones, by comparing the columns in the binlog event to the stream schema, and if there are any additional columns, run discovery and send a new `SCHEMA` message to target. This helps avoid data loss.
+
+**Tap Zendesk**
+- Bump `pipelinewise-tap-zendesk` to 1.2.1
+    - Use `start_time` query parameter to load satisfaction_ratings stream incrementally
+
+**Target Snowflake**
+- Bump `pipelinewise-target-snowflake` to 1.7.0
+    - Add `s3_acl` option to support ACL for S3 upload
+
+**Target Redshift**
+- Bump `pipelinewise-target-redshift` to 1.5.0
+    - Add `s3_acl` option to support ACL for S3 upload
+
+0.19.0 (2020-07-21)
+-------------------
+- Add tap-github
+- Extract and send known error patterns from logs to alerts
+
+**Tap MongoDB**
+- Bump `pipelinewise-tap-mongodb` to 1.0.1
+    - Fix case where resume tokens are not json serializable by extracting and saving `_data` only
+
+**Tap Zendesk**
+- Bump `pipelinewise-tap-zendesk` to 1.2.0
+    - Configurable `rate_limit`, `max_workers` and `batch_size` parameters
+
+0.18.1 (2020-07-15)
+-------------------
+- Fixed an issue when vault encrypted values were not in loaded from `config.yml`
+
+0.18.0 (2020-07-14)
+-------------------
+- Add generic alert sender with Slack and VictorOps integration
+
+**Tap Postgres**
+- Bump `pipelinewise-tap-postgres` to 1.6.3
+    - Fixed a data loss issue when running `LOG_BASED` the tap not sending new `SCHEMA`
+
+0.17.1 (2020-07-09)
+-------------------
+- Fixed an issue when using FastSync on big MongoDB collections caused memory errors
+- Fixed an issue when `sync_tables` command was not working and failed with exception
+- Fixed an issue when custom `stream_buffer_size` option produced unreadable log files
+
+0.17.0 (2020-06-29)
+-------------------
+- Add tap-mongodb with FastSync components to Snowflake and Postgres
+- Add tap-google-analytics (as an optional extra connector, with no FastSync)
+- Add configurable `stream_buffer_size` option to use large buffers between taps and targets to avoid taps being blocked by long running targets.
+
+**FastSync**
+- Fixed an issue when some bad but valid MySQL dates are not loaded correctly into Snowflake
+
+**Tap MySQL**
+- Bump `pipelinewise-tap-mysql` to 1.3.2
+    - Fixed some dependency issues and bump `pymysql` to 0.9.3
+    - Full changelog at https://github.com/transferwise/pipelinewise-tap-mysql/blob/master/CHANGELOG.md#132-2020-06-15
+
+**Target Snowflake**
+- Bump `pipelinewise-target-snowflake` to 1.6.6
+    - Fixed an issue when new columns sometimes not added to target table
+    - Fixed an issue when the query runner returned incorrect value when multiple queries running in one transaction
+    - FUll changelog at https://github.com/transferwise/pipelinewise-target-snowflake/blob/master/CHANGELOG.md#166-2020-06-26
+
+
 0.16.0 (2020-05-19)
 -------------------
 - Support reserved words as table and column names across every component, including fastsync and singer executables

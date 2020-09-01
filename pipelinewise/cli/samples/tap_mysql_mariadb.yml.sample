@@ -7,6 +7,7 @@ id: "mysql_sample"                     # Unique identifier of the tap
 name: "Sample MySQL Database"          # Name of the tap
 type: "tap-mysql"                      # !! THIS SHOULD NOT CHANGE !!
 owner: "somebody@foo.com"              # Data owner to contact
+#send_alert: False                     # Optional: Disable all configured alerts on this tap
 
 
 # ------------------------------------------------------------------------------
@@ -22,7 +23,7 @@ db_conn:
                                        #           to improve the performance of
                                        #           data extraction
   #export_batch_rows                   # Optional: Number of rows to export from MySQL
-                                       #           in one batch. Default is 20000.
+                                       #           in one batch. Default is 50000.
 
 
 # ------------------------------------------------------------------------------
@@ -31,6 +32,7 @@ db_conn:
 # ------------------------------------------------------------------------------
 target: "snowflake"                    # ID of the target connector where the data will be loaded
 batch_size_rows: 20000                 # Batch size for the stream to optimise load performance
+stream_buffer_size: 0                  # In-memory buffer size (MB) between taps and targets for asynchronous data pipes
 
 
 # ------------------------------------------------------------------------------

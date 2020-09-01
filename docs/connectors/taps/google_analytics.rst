@@ -43,6 +43,7 @@ Example YAML for ``tap-google-analytics``:
     name: "Google Analytics"               # Name of the tap
     type: "tap-google-analytics"           # !! THIS SHOULD NOT CHANGE !!
     owner: "somebody@foo.com"              # Data owner to contact
+    #send_alert: False                     # Optional: Disable all configured alerts on this tap
 
 
     # ------------------------------------------------------------------------------
@@ -69,6 +70,7 @@ Example YAML for ``tap-google-analytics``:
     # ------------------------------------------------------------------------------
     target: "snowflake"                        # ID of the target connector where the data will be loaded
     batch_size_rows: 20000                     # Batch size for the stream to optimise load performance
+    stream_buffer_size: 0                      # In-memory buffer size (MB) between taps and targets for asynchronous data pipes
     default_target_schema: "google-analytic"   # Target schema where the data will be loaded
     #default_target_schema_select_permission:  # Optional: Grant SELECT on schema and tables that created
     #  - grp_power
