@@ -16,7 +16,7 @@ pipeline {
     stage('build') {
       steps {
           sh '''
-          docker build --build-arg CONNECTORS="${connectors}" -t "${image_tag}" .
+          docker build --build-arg connectors="${connectors}" -t "${image_tag}" .
           '''
       }
     }

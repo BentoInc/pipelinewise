@@ -1,3 +1,31 @@
+0.23.0 (2020-09-25)
+-------------------
+
+- Fixed an issue when missing empty breadcrumb in tap properties file didn't raise an exception
+- Add option to build docker images only with selected tap and target connectors
+
+**Tap Postgres**
+- Bump `pipelinewise-tap-postgres` to 1.7.0
+    - Option to enable SSL mode
+    - Fixed an issue when timestamps out of the ISO-8601 range caused some failures
+    - Fixed an issue when when postgres replication slot name not generated correctly and contained invalid characters
+
+**Target Postgres**
+- Bump `pipelinewise-target-postgres` to 2.1.0
+    - Option to enable SSL mode
+
+0.22.1 (2020-09-10)
+-------------------
+
+**Tap MySQL**
+- Bump `pipelinewise-tap-mysql` to 1.3.7
+    - Fixed an issue when `tap-mysql` was logging every extracted record on INFO level
+    - Fixed an issue when `TIME` column types replaced the whole record
+
+**Target S3 CSV**
+- Bump `pipelinewise-target-s3-csv` to 1.4.0
+    - Fixed an issue when `target-s3-csv` created temp files in system `/tmp` instead of PPW specific `~/.pipelinewise/tmp`
+
 0.22.0 (2020-08-28)
 -------------------
 
