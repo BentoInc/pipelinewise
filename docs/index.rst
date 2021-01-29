@@ -182,6 +182,48 @@ PipelineWise can replicate data from the following data sources:
 
         :ref:`tap-github`
 
+.. container:: tile-wrapper
+
+    .. container:: tile
+
+        .. container:: img-hover-zoom
+
+          .. image:: img/shopify-logo.png
+             :target: connectors/taps/shopify.html
+
+        :ref:`tap-shopify`
+
+    .. container:: tile
+
+        .. container:: img-hover-zoom
+
+          .. image:: img/slack-logo.png
+             :target: connectors/taps/slack.html
+
+        :ref:`tap-slack`
+
+.. container:: tile-wrapper
+
+    .. container:: tile
+
+        .. container:: img-hover-zoom
+
+          .. image:: img/mixpanel-logo.png
+             :target: connectors/taps/mixpanel.html
+
+        :ref:`tap-mixpanel`
+
+    .. container:: tile-wrapper
+
+        .. container:: tile
+
+            .. container:: img-hover-zoom
+
+              .. image:: img/twilio-logo.png
+                 :target: taps/twilio.html
+
+            :ref:`tap-twilio`
+
 
 Target (Destination Connectors)
 -------------------------------
@@ -277,6 +319,7 @@ Content
 
    project/contribution
    project/about
+   project/licenses
 
 Indices and tables
 ==================

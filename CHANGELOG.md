@@ -1,3 +1,91 @@
+0.30.0 (2021-01-22)
+-------------------
+
+- Drop postgres replication slot in case of full re-sync of a tap
+- Add `fastsync_parallelism` optional parameter to customize the number of cores to use for parallelisation in FastSync
+- Bump `pipelinewise-tap-twilio` to `1.0.2`
+
+0.29.0 (2021-01-13)
+-------------------
+
+- Add tap-twilio
+
+0.28.1 (2021-01-12)
+-------------------
+
+- patch `pipelinewise-tap-snowflake`
+- Bumping dependencies of Pipelinewise
+
+0.28.0 (2021-01-08)
+-------------------
+
+**New**
+- Support environement variables in tap yaml files and rendering them with jinja2 template.
+
+**Fixes**
+- bump pipelinewise-target-snowflake to 1.10.1
+- Map Mysql's `tinyint(1) unsigned` column type to targets' number column type
+- Bumping dependencies of Pipelinewise
+- Detect the copyright year dynamically
+
+0.27.0 (2020-12-04)
+-------------------
+
+- Bumping `snowflake-connector-python` across all componenets that uses to `2.3.6`
+- Tagging all queries issues to Snowflake by FastSync Snowflake and singer target-snowflake.
+- Add ssl support to mongodump in FastSync mongodb.
+- Add support for MySQL spatial types.
+
+- Fix issues build PPW docker images
+- Update documentation.
+
+
+0.26.0 (2020-10-30)
+-------------------
+
+- Add tap-mixpanel
+- Bump `joblib` to 0.16.0 to fix some issues when running on python 3.8
+
+0.25.0 (2020-10-23)
+-------------------
+
+- Add `--profiler` optional parameter to pipelinewise commands
+- Use `--debug` logging in every subprocess
+- Fixed an issue when fastsync not extracting NULL characters correctly from MySQL
+
+**Tap Postgres**
+- Bump `pipelinewise-tap-postgres` to 1.7.1
+    - Parse data from json(b) when converting a row to a record message in log based replication method.
+
+**Tap MySQL**
+- Bump `pipelinewise-tap-mysql` to 1.3.8
+    - Fix mapping bit to boolean values
+
+**Tap Slack**
+- Bump `pipelinewise-tap-slack` to 1.1.0
+    - Extract user profiles from `users.list` API endpoint
+    - Extract message attachments from `conversations.history` API endpoint
+    - Fixed an issue when incremental bookmarks were not sent correctly in the `STATE` messages
+
+0.24.1 (2020-10-02)
+-------------------
+
+- Exit as failure when another instance of the tap is running or the tap is not enabled
+
+**Tap Slack**
+- Bump `pipelinewise-tap-slack` to 1.0.1
+    - Fixed an issue when `thread_ts` values were not populated correctly in `messages` and `threads` streams
+
+0.24.0 (2020-10-01)
+-------------------
+
+- Add tap-slack
+- Add tap-shopify
+
+**Tap MongoDB**
+- Bump `pipelinewise-tap-mongodb` to 1.2.0
+    - Add support for SRV urls
+
 0.23.0 (2020-09-25)
 -------------------
 

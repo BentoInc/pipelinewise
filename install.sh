@@ -59,7 +59,7 @@ make_virtualenv() {
     echo "Making Virtual Environment for [$1] in $VENV_DIR"
     python3 -m venv $VENV_DIR/$1
     source $VENV_DIR/$1/bin/activate
-    python3 -m pip install --upgrade pip setuptools
+    python3 -m pip install --upgrade pip setuptools wheel
 
     if [ -f "requirements.txt" ]; then
         python3 -m pip install --upgrade -r requirements.txt
@@ -70,12 +70,10 @@ make_virtualenv() {
             PIP_ARGS=$PIP_ARGS"[test]"
         fi
 
-        python3 -m pip install --upgrade -e .$PIP_ARGS --use-feature=2020-resolver
+        python3 -m pip install --upgrade -e .$PIP_ARGS
     fi
 
     echo ""
-    echo "===== Checking dependencies for conflict ..."
-    python3 -m pip check && echo "No conflicts" || exit 1
 
     check_license $1
     deactivate
@@ -155,7 +153,12 @@ for arg in "$@"; do
 done
 
 # Welcome message
-cat $SRC_DIR/motd
+if ! ENVSUBST_LOC="$(type -p "envsubst")" || [[ -z ENVSUBST_LOC ]]; then
+  echo "envsubst not found but it's required to run this script. Try to install gettext or gettext-base package"
+  exit 1
+fi
+
+CURRENT_YEAR=$(date +"%Y") envsubst < $SRC_DIR/motd
 
 # Install PipelineWise core components
 cd $SRC_DIR
@@ -173,6 +176,9 @@ DEFAULT_CONNECTORS=(
     tap-zendesk
     tap-mongodb
     tap-github
+    tap-slack
+    tap-mixpanel
+    tap-twilio
     target-s3-csv
     target-snowflake
     target-redshift
@@ -184,7 +190,7 @@ EXTRA_CONNECTORS=(
     tap-oracle
     tap-zuora
     tap-google-analytics
-    tap-pardot
+    tap-shopify
 )
 
 # Install only the default connectors if --connectors argument not passed
@@ -194,7 +200,7 @@ if [[ -z $CONNECTORS ]]; then
     done
 
 
-# Install every avaliable connectors if --connectors=all passed
+# Install every available connectors if --connectors=all passed
 elif [[ $CONNECTORS == "all" ]]; then
     for i in ${DEFAULT_CONNECTORS[@]}; do
         install_connector $i

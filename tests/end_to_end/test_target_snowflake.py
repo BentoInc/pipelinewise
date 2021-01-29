@@ -83,7 +83,10 @@ class TestTargetSnowflake:
                                  ' \'9:1:00\'),'
                                  '(\'Special Characters: [\"\\,''!@£$%^&*()]\\\\\', null, \'B\', '
                                  'null, \'12:00:00\'),'
-                                 '(\'	\', 20, \'B\', null, \'15:36:10\')')
+                                 '(\'	\', 20, \'B\', null, \'15:36:10\'),'
+                                 '(CONCAT(CHAR(0x0000 using utf16), \'<- null char\'), 20, \'B\', null, \'15:36:10\')')
+
+        self.run_query_tap_mysql('UPDATE all_datatypes SET c_point = NULL')
 
         #  INCREMENTAL
         self.run_query_tap_mysql('INSERT INTO address(isactive, street_number, date_created, date_updated,'
@@ -103,7 +106,7 @@ class TestTargetSnowflake:
     @pytest.mark.dependency(depends=['import_config'])
     def test_resync_mariadb_to_sf(self, tap_mariadb_id=TAP_MARIADB_ID):
         """Resync tables from MariaDB to Snowflake"""
-        assertions.assert_resync_tables_success(tap_mariadb_id, TARGET_ID)
+        assertions.assert_resync_tables_success(tap_mariadb_id, TARGET_ID, profiling=True)
         assertions.assert_row_counts_equal(self.run_query_tap_mysql, self.run_query_target_snowflake)
         assertions.assert_all_columns_exist(self.run_query_tap_mysql, self.run_query_target_snowflake,
                                             mysql_to_snowflake.tap_type_to_target_type)
@@ -160,7 +163,7 @@ class TestTargetSnowflake:
         self.run_query_tap_postgres("DELETE FROM public.country WHERE code = 'UMI'")
 
         # 3. Run tap second time - both fastsync and a singer should be triggered, there are some FULL_TABLE
-        assertions.assert_run_tap_success(TAP_POSTGRES_ID, TARGET_ID, ['fastsync', 'singer'])
+        assertions.assert_run_tap_success(TAP_POSTGRES_ID, TARGET_ID, ['fastsync', 'singer'], profiling=True)
         assertions.assert_row_counts_equal(self.run_query_tap_postgres, self.run_query_target_snowflake)
         assertions.assert_all_columns_exist(self.run_query_tap_postgres, self.run_query_target_snowflake)
         assertions.assert_date_column_naive_in_target(self.run_query_target_snowflake,

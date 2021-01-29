@@ -22,6 +22,16 @@
         "target_schema"
       ]
     },
+    "db_conn": {
+      "type": "object",
+      "properties": {
+        "fastsync_parallelism": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        }
+      }
+    },
     "table": {
       "type": "object",
       "anyOf": [
@@ -214,11 +224,15 @@
         "tap-zuora",
         "tap-google-analytics",
         "tap-github",
-        "tap-pardot"
+        "tap-pardot",
+        "tap-shopify",
+        "tap-slack",
+        "tap-mixpanel",
+        "tap-twilio"
       ]
     },
     "db_conn": {
-      "type": "object"
+      "$ref": "#/definitions/db_conn"
     },
     "target": {
       "type": "string"
