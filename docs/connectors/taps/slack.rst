@@ -37,7 +37,7 @@ following the steps in the :ref:`generating_pipelines` section.
 
 Example YAML for ``tap-slack``:
 
-.. code-block:: bash
+.. code-block:: yaml
 
     ---
 
@@ -86,6 +86,7 @@ Example YAML for ``tap-slack``:
     default_target_schema: "slack"            # Target schema where the data will be loaded
     #default_target_schema_select_permission:  # Optional: Grant SELECT on schema and tables that created
     #  - grp_power
+    #batch_wait_limit_seconds: 3600            # Optional: Maximum time to wait for `batch_size_rows`. Available only for snowflake target.
 
 
     # ------------------------------------------------------------------------------

@@ -1,3 +1,41 @@
+0.33.0 (2021-04-12)
+-------------------
+
+- Add `batch_wait_limit_seconds` option to every tap/target combination
+- Bump `pipelinewise-target-snowflake` from `1.11.1` to `1.12.0`
+    - Add `batch_wait_limit_seconds` option
+- Bump `pipelinewise-tap-mysql` from `1.4.2` to `1.4.3`
+- Bump a few vulnerable and security outdated packages
+
+0.32.1 (2021-03-26)
+-------------------
+
+- Bump `pipelinewise-target-snowflake` from `1.11.0` to `1.11.1`
+
+0.32.0 (2021-03-22)
+-------------------
+
+- Add transformation validation post import check to detect and deny load time transformations that's changing data types
+- Fixed an issue when fastsync to Postgres and Snowflake were failing if multiple load time transformations defined on the same column
+- Fixed an issue when fastsync not using unique file names and causing table name collision in the target database
+- Bump `pipelinewise-tap-mysql` from `1.4.0` to `1.4.2`
+    - Fixed an issue when data sometimes lost during `LOG_BASED` replication
+- Bump `pipelinewise-tap-twilio` from `1.1.1` to `1.1.2`
+    - Fix missing elements for streams without ordered response
+- Bump `pipelinewsie-target-snowflake` from `1.10.1` to `1.11.0`
+
+0.31.1 (2021-02-26)
+-------------------
+
+- Add support for AWS profile based authentication to FastSync tap-s3-csv.
+
+0.31.0 (2021-02-23)
+-------------------
+
+- Update TransferWise references to Wise
+- Bump `pipelinewise-tap-twilio` to `1.1.1`
+- Bump `psycopg-binary` from `2.8.5` to `2.8.6`
+
 0.30.0 (2021-01-22)
 -------------------
 

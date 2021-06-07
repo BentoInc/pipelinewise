@@ -32,7 +32,7 @@ If you're building something where a wide variety of users need to be able to gi
 
 Example YAML for ``tap-google-analytics``:
 
-.. code-block:: bash
+.. code-block:: yaml
 
     ---
 
@@ -74,6 +74,7 @@ Example YAML for ``tap-google-analytics``:
     default_target_schema: "google-analytic"   # Target schema where the data will be loaded
     #default_target_schema_select_permission:  # Optional: Grant SELECT on schema and tables that created
     #  - grp_power
+    #batch_wait_limit_seconds: 3600            # Optional: Maximum time to wait for `batch_size_rows`. Available only for snowflake target.
 
 
     # ------------------------------------------------------------------------------

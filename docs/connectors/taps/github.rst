@@ -17,12 +17,12 @@ Configuring what to extract
 '''''''''''''''''''''''''''
 
 PipelineWise configures every tap with a common structured YAML file format.
-A sample YAML for Jira replication can be generated into a project directory by
+A sample YAML for GitHub replication can be generated into a project directory by
 following the steps in the :ref:`generating_pipelines` section.
 
 Example YAML for ``tap-github``:
 
-.. code-block:: bash
+.. code-block:: yaml
 
     ---
 
@@ -54,6 +54,7 @@ Example YAML for ``tap-github``:
     default_target_schema: "github"            # Target schema where the data will be loaded
     #default_target_schema_select_permission:  # Optional: Grant SELECT on schema and tables that created
     #  - grp_power
+    #batch_wait_limit_seconds: 3600            # Optional: Maximum time to wait for `batch_size_rows`. Available only for snowflake target.
 
 
     # ------------------------------------------------------------------------------
