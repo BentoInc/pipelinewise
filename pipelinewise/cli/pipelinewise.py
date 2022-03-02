@@ -13,16 +13,44 @@ import pidfile
 
 from datetime import datetime
 from time import time
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Any
 from joblib import Parallel, delayed, parallel_backend
 from tabulate import tabulate
 
 from . import utils
+from .constants import ConnectorType
 from . import commands
 from .commands import TapParams, TargetParams, TransformParams
 from .config import Config
 from .alert_sender import AlertSender
 from .alert_handlers.base_alert_handler import BaseAlertHandler
+from .errors import InvalidTransformationException, DuplicateConfigException, InvalidConfigException
+
+FASTSYNC_PAIRS = {
+    ConnectorType.TAP_MYSQL: {
+        ConnectorType.TARGET_SNOWFLAKE,
+        ConnectorType.TARGET_REDSHIFT,
+        ConnectorType.TARGET_POSTGRES,
+        ConnectorType.TARGET_BIGQUERY,
+    },
+    ConnectorType.TAP_POSTGRES: {
+        ConnectorType.TARGET_SNOWFLAKE,
+        ConnectorType.TARGET_REDSHIFT,
+        ConnectorType.TARGET_POSTGRES,
+        ConnectorType.TARGET_BIGQUERY,
+    },
+    ConnectorType.TAP_S3_CSV: {
+        ConnectorType.TARGET_SNOWFLAKE,
+        ConnectorType.TARGET_REDSHIFT,
+        ConnectorType.TARGET_POSTGRES,
+        ConnectorType.TARGET_BIGQUERY,
+    },
+    ConnectorType.TAP_MONGODB: {
+        ConnectorType.TARGET_SNOWFLAKE,
+        ConnectorType.TARGET_POSTGRES,
+        ConnectorType.TARGET_BIGQUERY,
+    },
+}
 
 
 # pylint: disable=too-many-lines,too-many-instance-attributes,too-many-public-methods
@@ -46,7 +74,9 @@ class PipelineWise:
         self.config_dir = config_dir
         self.venv_dir = venv_dir
         self.extra_log = args.extra_log
-        self.pipelinewise_bin = os.path.join(self.venv_dir, 'cli', 'bin', 'pipelinewise')
+        self.pipelinewise_bin = os.path.join(
+            self.venv_dir, 'cli', 'bin', 'pipelinewise'
+        )
         self.config_path = os.path.join(self.config_dir, 'config.json')
         self.load_config()
         self.alert_sender = AlertSender(self.config.get('alert_handlers'))
@@ -61,18 +91,21 @@ class PipelineWise:
             self.target_bin = self.get_connector_bin(self.target['type'])
             self.target_python_bin = self.get_connector_python_bin(self.target['type'])
 
-        self.transform_field_bin = self.get_connector_bin(self.TRANSFORM_FIELD_CONNECTOR_NAME)
-        self.transform_field_python_bin = self.get_connector_python_bin(self.TRANSFORM_FIELD_CONNECTOR_NAME)
+        self.transform_field_bin = self.get_connector_bin(
+            self.TRANSFORM_FIELD_CONNECTOR_NAME
+        )
+        self.transform_field_python_bin = self.get_connector_python_bin(
+            self.TRANSFORM_FIELD_CONNECTOR_NAME
+        )
         self.tap_run_log_file = None
 
         # Catch SIGINT and SIGTERM to exit gracefully
         for sig in [signal.SIGINT, signal.SIGTERM]:
-            signal.signal(sig, self._exit_gracefully)
+            signal.signal(sig, self.stop_tap)
 
-    def send_alert(self,
-                   message: str,
-                   level: str = BaseAlertHandler.ERROR,
-                   exc: Exception = None) -> dict:
+    def send_alert(
+        self, message: str, level: str = BaseAlertHandler.ERROR, exc: Exception = None
+    ) -> dict:
         """
         Send alert messages to every alert handler if sender is not disabled for the tap
 
@@ -88,7 +121,9 @@ class PipelineWise:
 
         send_alert = self.tap.get('send_alert', True)
         if send_alert:
-            stats = self.alert_sender.send_to_all_handlers(message=message, level=level, exc=exc)
+            stats = self.alert_sender.send_to_all_handlers(
+                message=message, level=level, exc=exc
+            )
 
         return stats
 
@@ -105,18 +140,27 @@ class PipelineWise:
             dict_a.update(dict_b)
 
             # Save the new dict as JSON into a temp file
-            tempfile_path = utils.create_temp_file(dir=self.get_temp_dir(),
-                                                   prefix='target_config_',
-                                                   suffix='.json')[1]
+            tempfile_path = utils.create_temp_file(
+                dir=self.get_temp_dir(), prefix='target_config_', suffix='.json'
+            )[1]
             utils.save_json(dict_a, tempfile_path)
 
             return tempfile_path
         except Exception as exc:
-            raise Exception(f'Cannot merge JSON files {dict_a} {dict_b} - {exc}') from exc
+            raise Exception(
+                f'Cannot merge JSON files {dict_a} {dict_b} - {exc}'
+            ) from exc
 
     # pylint: disable=too-many-statements,too-many-branches,too-many-nested-blocks,too-many-locals,too-many-arguments
-    def create_filtered_tap_properties(self, target_type, tap_type, tap_properties, tap_state, filters,
-                                       create_fallback=False):
+    def create_filtered_tap_properties(
+        self,
+        target_type: ConnectorType,
+        tap_type: ConnectorType,
+        tap_properties: str,
+        tap_state: str,
+        filters: Dict[str, Any],
+        create_fallback=False,
+    ):
         """
         Create a filtered version of tap properties file based on specific filter conditions.
 
@@ -132,11 +176,10 @@ class PipelineWise:
         """
         # Get filter conditions with default values from input dictionary
         # Nothing selected by default
-        f_selected = filters.get('selected', None)
-        f_target_type = filters.get('target_type', None)
-        f_tap_type = filters.get('tap_type', None)
+        f_selected: bool = filters.get('selected', False)
+        f_tap_target_pairs: Dict = filters.get('tap_target_pairs', {})
         f_replication_method = filters.get('replication_method', None)
-        f_initial_sync_required = filters.get('initial_sync_required', None)
+        f_initial_sync_required: bool = filters.get('initial_sync_required', False)
 
         # Lists of tables that meet and don't meet the filter criteria
         filtered_tap_stream_ids = []
@@ -152,7 +195,9 @@ class PipelineWise:
             fallback_properties = copy.deepcopy(properties) if create_fallback else {}
 
             # Foreach stream (table) in the original properties
-            for stream_idx, stream in enumerate(properties.get('streams', tap_properties)):
+            for stream_idx, stream in enumerate(
+                properties.get('streams', tap_properties)
+            ):
                 initial_sync_required = False
 
                 # Collect required properties from the properties file
@@ -171,7 +216,11 @@ class PipelineWise:
                 # Can we make sure that the stream has the right metadata?
                 # To be safe, check if no right metadata has been found, then throw an exception.
                 if not table_meta:
-                    self.logger.error('Stream %s has no metadata with no breadcrumbs: %s.', tap_stream_id, metadata)
+                    self.logger.error(
+                        'Stream %s has no metadata with no breadcrumbs: %s.',
+                        tap_stream_id,
+                        metadata,
+                    )
                     raise Exception(f'Missing metadata in stream {tap_stream_id}')
 
                 selected = table_meta.get('selected', False)
@@ -180,7 +229,9 @@ class PipelineWise:
                 # Detect if initial sync is required. Look into the state file, get the bookmark
                 # for the current stream (table) and if valid bookmark doesn't exist then
                 # initial sync is required
-                bookmarks = state.get('bookmarks', {}) if isinstance(state, dict) else {}
+                bookmarks = (
+                    state.get('bookmarks', {}) if isinstance(state, dict) else {}
+                )
 
                 new_stream = False
 
@@ -191,7 +242,9 @@ class PipelineWise:
                 else:
                     stream_bookmark = bookmarks[tap_stream_id]
 
-                    if self._is_initial_sync_required(replication_method, stream_bookmark):
+                    if self._is_initial_sync_required(
+                        replication_method, stream_bookmark
+                    ):
                         initial_sync_required = True
 
                 # Compare actual values to the filter conditions.
@@ -199,22 +252,39 @@ class PipelineWise:
                 # Set the "selected" key to False if the actual values don't meet the filter criteria
                 # pylint: disable=too-many-boolean-expressions
                 if (
-                        (f_selected is None or selected == f_selected) and
-                        (f_target_type is None or target_type in f_target_type) and
-                        (f_tap_type is None or tap_type in f_tap_type) and
-                        (f_replication_method is None or replication_method in f_replication_method) and
-                        (f_initial_sync_required is None or initial_sync_required == f_initial_sync_required)
+                    (f_selected is None or selected == f_selected)
+                    and (
+                        f_tap_target_pairs is None
+                        or target_type in f_tap_target_pairs.get(tap_type, set())
+                    )
+                    and (
+                        f_replication_method is None
+                        or replication_method in f_replication_method
+                    )
+                    and (
+                        f_initial_sync_required is None
+                        or initial_sync_required == f_initial_sync_required
+                    )
                 ):
-                    self.logger.debug("""Filter condition(s) matched:
+                    self.logger.debug(
+                        """Filter condition(s) matched:
                         Table              : %s
                         Tap Stream ID      : %s
                         Selected           : %s
                         Replication Method : %s
                         Init Sync Required : %s
-                    """, table_name, tap_stream_id, selected, replication_method, initial_sync_required)
+                    """,
+                        table_name,
+                        tap_stream_id,
+                        selected,
+                        replication_method,
+                        initial_sync_required,
+                    )
 
                     # Filter condition matched: mark table as selected to sync
-                    properties['streams'][stream_idx]['metadata'][meta_idx]['metadata']['selected'] = True
+                    properties['streams'][stream_idx]['metadata'][meta_idx]['metadata'][
+                        'selected'
+                    ] = True
                     filtered_tap_stream_ids.append(tap_stream_id)
 
                     # Filter condition matched:
@@ -222,47 +292,58 @@ class PipelineWise:
                     # the fallback properties as well if the table is selected in the original properties.
                     # Otherwise, mark it as not selected
                     if create_fallback:
-                        if new_stream and replication_method in [self.INCREMENTAL, self.LOG_BASED]:
-                            fallback_properties['streams'][stream_idx]['metadata'][meta_idx]['metadata'][
-                                'selected'] = True
+                        if new_stream and replication_method in [
+                            self.INCREMENTAL,
+                            self.LOG_BASED,
+                        ]:
+                            fallback_properties['streams'][stream_idx]['metadata'][
+                                meta_idx
+                            ]['metadata']['selected'] = True
                             if selected:
                                 fallback_filtered_stream_ids.append(tap_stream_id)
                         else:
-                            fallback_properties['streams'][stream_idx]['metadata'][meta_idx]['metadata'][
-                                'selected'] = False
+                            fallback_properties['streams'][stream_idx]['metadata'][
+                                meta_idx
+                            ]['metadata']['selected'] = False
                 else:
                     # Filter condition didn't match: mark table as not selected to sync
-                    properties['streams'][stream_idx]['metadata'][meta_idx]['metadata']['selected'] = False
+                    properties['streams'][stream_idx]['metadata'][meta_idx]['metadata'][
+                        'selected'
+                    ] = False
 
                     # Filter condition didn't match: mark table as selected to sync in the fallback properties
                     # Fallback only if the table is selected in the original properties
                     if create_fallback and selected is True:
-                        fallback_properties['streams'][stream_idx]['metadata'][meta_idx]['metadata']['selected'] = True
+                        fallback_properties['streams'][stream_idx]['metadata'][
+                            meta_idx
+                        ]['metadata']['selected'] = True
                         fallback_filtered_stream_ids.append(tap_stream_id)
 
             # Save the generated properties file(s) and return
             # Fallback required: Save filtered and fallback properties JSON
             if create_fallback:
                 # Save to files: filtered and fallback properties
-                temp_properties_path = utils.create_temp_file(dir=self.get_temp_dir(),
-                                                              prefix='properties_',
-                                                              suffix='.json')[1]
+                temp_properties_path = utils.create_temp_file(
+                    dir=self.get_temp_dir(), prefix='properties_', suffix='.json'
+                )[1]
                 utils.save_json(properties, temp_properties_path)
 
-                temp_fallback_properties_path = utils.create_temp_file(dir=self.get_temp_dir(),
-                                                                       prefix='properties_',
-                                                                       suffix='.json')[1]
+                temp_fallback_properties_path = utils.create_temp_file(
+                    dir=self.get_temp_dir(), prefix='properties_', suffix='.json'
+                )[1]
                 utils.save_json(fallback_properties, temp_fallback_properties_path)
 
-                return temp_properties_path, \
-                       filtered_tap_stream_ids, \
-                       temp_fallback_properties_path, \
-                       fallback_filtered_stream_ids
+                return (
+                    temp_properties_path,
+                    filtered_tap_stream_ids,
+                    temp_fallback_properties_path,
+                    fallback_filtered_stream_ids,
+                )
 
             # Fallback not required: Save only the filtered properties JSON
-            temp_properties_path = utils.create_temp_file(dir=self.get_temp_dir(),
-                                                          prefix='properties_',
-                                                          suffix='.json')[1]
+            temp_properties_path = utils.create_temp_file(
+                dir=self.get_temp_dir(), prefix='properties_', suffix='.json'
+            )[1]
             utils.save_json(properties, temp_properties_path)
 
             return temp_properties_path, filtered_tap_stream_ids
@@ -318,21 +399,6 @@ class PipelineWise:
         """
         return os.path.join(self.venv_dir, connector_type, 'bin', 'python')
 
-    @classmethod
-    def get_connector_files(cls, connector_dir):
-        """
-        Get connector file paths
-        """
-        return {
-            'config': os.path.join(connector_dir, 'config.json'),
-            'inheritable_config': os.path.join(connector_dir, 'inheritable_config.json'),
-            'properties': os.path.join(connector_dir, 'properties.json'),
-            'state': os.path.join(connector_dir, 'state.json'),
-            'transformation': os.path.join(connector_dir, 'transformation.json'),
-            'selection': os.path.join(connector_dir, 'selection.json'),
-            'pidfile': os.path.join(connector_dir, 'pipelinewise.pid')
-        }
-
     def get_targets(self):
         """
         Get every target
@@ -353,14 +419,14 @@ class PipelineWise:
         self.logger.debug('Getting %s target', target_id)
         targets = self.get_targets()
 
-        target = next((item for item in targets if item['id'] == target_id), False)
+        target = next((item for item in targets if item['id'] == target_id), None)
 
         if not target:
             raise Exception(f'Cannot find {target_id} target')
 
         target_dir = self.get_target_dir(target_id)
         if os.path.isdir(target_dir):
-            target['files'] = self.get_connector_files(target_dir)
+            target['files'] = Config.get_connector_files(target_dir)
         else:
             raise Exception(f'Cannot find target at {target_dir}')
 
@@ -385,21 +451,21 @@ class PipelineWise:
 
         return taps
 
-    def get_tap(self, target_id, tap_id):
+    def get_tap(self, target_id: str, tap_id: str) -> Dict:
         """
         Get tap by id from a specific target
         """
         self.logger.debug('Getting %s tap from target %s', tap_id, target_id)
         taps = self.get_taps(target_id)
 
-        tap = next((item for item in taps if item['id'] == tap_id), False)
+        tap = next((item for item in taps if item['id'] == tap_id), None)
 
         if not tap:
             raise Exception(f'Cannot find {tap_id} tap in {target_id} target')
 
         tap_dir = self.get_tap_dir(target_id, tap_id)
         if os.path.isdir(tap_dir):
-            tap['files'] = self.get_connector_files(tap_dir)
+            tap['files'] = Config.get_connector_files(tap_dir)
         else:
             raise Exception(f'Cannot find tap at {tap_dir}')
 
@@ -409,8 +475,9 @@ class PipelineWise:
 
         return tap
 
+    # TODO: This method is too complex! make its complexity less than 15!
     # pylint: disable=too-many-branches,too-many-statements,too-many-nested-blocks,too-many-locals
-    def merge_schemas(self, old_schema, new_schema):
+    def merge_schemas(self, old_schema, new_schema):  # noqa: C901
         """
         Merge two schemas
         """
@@ -424,7 +491,14 @@ class PipelineWise:
             for new_stream_idx, new_stream in enumerate(new_streams):
                 new_tap_stream_id = new_stream['tap_stream_id']
 
-                old_stream = next((item for item in old_streams if item['tap_stream_id'] == new_tap_stream_id), False)
+                old_stream = next(
+                    (
+                        item
+                        for item in old_streams
+                        if item['tap_stream_id'] == new_tap_stream_id
+                    ),
+                    None,
+                )
 
                 # Is this a new stream?
                 if not old_stream:
@@ -436,54 +510,87 @@ class PipelineWise:
                     new_stream_table_mdata_idx = 0
                     old_stream_table_mdata_idx = 0
                     try:
-                        new_stream_table_mdata_idx = \
-                            [i for i, md in enumerate(new_stream['metadata']) if md['breadcrumb'] == []][0]
-                        old_stream_table_mdata_idx = \
-                            [i for i, md in enumerate(old_stream['metadata']) if md['breadcrumb'] == []][0]
+                        new_stream_table_mdata_idx = [
+                            i
+                            for i, md in enumerate(new_stream['metadata'])
+                            if md['breadcrumb'] == []
+                        ][0]
+                        old_stream_table_mdata_idx = [
+                            i
+                            for i, md in enumerate(old_stream['metadata'])
+                            if md['breadcrumb'] == []
+                        ][0]
                     except Exception:
                         pass
 
                     # Copy is-new flag from the old stream
                     try:
-                        new_schema['streams'][new_stream_idx]['is-new'] = old_stream['is-new']
+                        new_schema['streams'][new_stream_idx]['is-new'] = old_stream[
+                            'is-new'
+                        ]
                     except Exception:
                         pass
 
                     # Copy selected from the old stream
                     try:
-                        new_schema['streams'][new_stream_idx]['metadata'][new_stream_table_mdata_idx]['metadata'][
-                            'selected'] = old_stream['metadata'][old_stream_table_mdata_idx]['metadata']['selected']
+                        new_schema['streams'][new_stream_idx]['metadata'][
+                            new_stream_table_mdata_idx
+                        ]['metadata']['selected'] = old_stream['metadata'][
+                            old_stream_table_mdata_idx
+                        ][
+                            'metadata'
+                        ][
+                            'selected'
+                        ]
                     except Exception:
                         pass
 
                     # Copy replication method from the old stream
                     try:
-                        new_schema['streams'][new_stream_idx]['metadata'] \
-                            [new_stream_table_mdata_idx]['metadata']['replication-method'] = \
-                            old_stream['metadata'][old_stream_table_mdata_idx]['metadata']['replication-method']
+                        new_schema['streams'][new_stream_idx]['metadata'][
+                            new_stream_table_mdata_idx
+                        ]['metadata']['replication-method'] = old_stream['metadata'][
+                            old_stream_table_mdata_idx
+                        ][
+                            'metadata'
+                        ][
+                            'replication-method'
+                        ]
                     except Exception:
                         pass
 
                     # Copy replication key from the old stream
                     try:
-                        new_schema['streams'][new_stream_idx]['metadata'][new_stream_table_mdata_idx] \
-                            ['metadata']['replication-key'] = \
-                            old_stream['metadata'][old_stream_table_mdata_idx]['metadata'][
-                                'replication-key']
+                        new_schema['streams'][new_stream_idx]['metadata'][
+                            new_stream_table_mdata_idx
+                        ]['metadata']['replication-key'] = old_stream['metadata'][
+                            old_stream_table_mdata_idx
+                        ][
+                            'metadata'
+                        ][
+                            'replication-key'
+                        ]
                     except Exception:
                         pass
 
                     # Is this new or modified field?
-                    new_fields = new_schema['streams'][new_stream_idx]['schema']['properties']
+                    new_fields = new_schema['streams'][new_stream_idx]['schema'][
+                        'properties'
+                    ]
                     old_fields = old_stream['schema']['properties']
                     for new_field_key in new_fields:
                         new_field = new_fields[new_field_key]
                         new_field_mdata_idx = -1
 
                         # Find new field metadata index
-                        for i, mdata in enumerate(new_schema['streams'][new_stream_idx]['metadata']):
-                            if len(mdata['breadcrumb']) == 2 and mdata['breadcrumb'][0] == 'properties' and \
-                                    mdata['breadcrumb'][1] == new_field_key:
+                        for i, mdata in enumerate(
+                            new_schema['streams'][new_stream_idx]['metadata']
+                        ):
+                            if (
+                                len(mdata['breadcrumb']) == 2
+                                and mdata['breadcrumb'][0] == 'properties'
+                                and mdata['breadcrumb'][1] == new_field_key
+                            ):
                                 new_field_mdata_idx = i
 
                         # Field exists
@@ -493,13 +600,19 @@ class PipelineWise:
 
                             # Find old field metadata index
                             for i, mdata in enumerate(old_stream['metadata']):
-                                if len(mdata['breadcrumb']) == 2 and mdata['breadcrumb'][0] == 'properties' and \
-                                        mdata['breadcrumb'][1] == new_field_key:
+                                if (
+                                    len(mdata['breadcrumb']) == 2
+                                    and mdata['breadcrumb'][0] == 'properties'
+                                    and mdata['breadcrumb'][1] == new_field_key
+                                ):
                                     old_field_mdata_idx = i
 
-                            new_mdata = new_schema['streams'][new_stream_idx]['metadata'][new_field_mdata_idx][
-                                'metadata']
-                            old_mdata = old_stream['metadata'][old_field_mdata_idx]['metadata']
+                            new_mdata = new_schema['streams'][new_stream_idx][
+                                'metadata'
+                            ][new_field_mdata_idx]['metadata']
+                            old_mdata = old_stream['metadata'][old_field_mdata_idx][
+                                'metadata'
+                            ]
 
                             # Copy is-new flag from the old properties
                             try:
@@ -521,28 +634,43 @@ class PipelineWise:
 
                             # Field exists and type is the same - Do nothing more in the schema
                             if new_field == old_field:
-                                self.logger.debug('Field exists in %s stream with the same type: %s: %s',
-                                                  new_tap_stream_id, new_field_key, new_field)
+                                self.logger.debug(
+                                    'Field exists in %s stream with the same type: %s: %s',
+                                    new_tap_stream_id,
+                                    new_field_key,
+                                    new_field,
+                                )
 
                             # Field exists but types are different - Mark the field as modified in the metadata
                             else:
-                                self.logger.debug('Field exists in %s stream but types are different: %s: %s}',
-                                                  new_tap_stream_id, new_field_key, new_field)
+                                self.logger.debug(
+                                    'Field exists in %s stream but types are different: %s: %s}',
+                                    new_tap_stream_id,
+                                    new_field_key,
+                                    new_field,
+                                )
                                 try:
-                                    new_schema['streams'][new_stream_idx]['metadata'][new_field_mdata_idx]['metadata'][
-                                        'is-modified'] = True
-                                    new_schema['streams'][new_stream_idx]['metadata'][new_field_mdata_idx]['metadata'][
-                                        'is-new'] = False
+                                    new_schema['streams'][new_stream_idx]['metadata'][
+                                        new_field_mdata_idx
+                                    ]['metadata']['is-modified'] = True
+                                    new_schema['streams'][new_stream_idx]['metadata'][
+                                        new_field_mdata_idx
+                                    ]['metadata']['is-new'] = False
                                 except Exception:
                                     pass
 
                         # New field - Mark the field as new in the metadata
                         else:
-                            self.logger.debug('New field in stream %s: %s: %s', new_tap_stream_id, new_field_key,
-                                              new_field)
+                            self.logger.debug(
+                                'New field in stream %s: %s: %s',
+                                new_tap_stream_id,
+                                new_field_key,
+                                new_field,
+                            )
                             try:
-                                new_schema['streams'][new_stream_idx]['metadata'][new_field_mdata_idx]['metadata'][
-                                    'is-new'] = True
+                                new_schema['streams'][new_stream_idx]['metadata'][
+                                    new_field_mdata_idx
+                                ]['metadata']['is-new'] = True
                             except Exception:
                                 pass
 
@@ -562,30 +690,54 @@ class PipelineWise:
             streams = schema['streams']
             for stream_idx, stream in enumerate(streams):
                 tap_stream_id = stream.get('tap_stream_id')
-                tap_stream_sel = False
+                tap_stream_sel = None
                 for sel in selection:
-                    if 'tap_stream_id' in sel and tap_stream_id.lower() == sel['tap_stream_id'].lower():
+                    if (
+                        'tap_stream_id' in sel
+                        and tap_stream_id.lower() == sel['tap_stream_id'].lower()
+                    ):
                         tap_stream_sel = sel
 
                 # Find table specific metadata entries in the old and new streams
                 try:
-                    stream_table_mdata_idx = [i for i, md in enumerate(stream['metadata']) if md['breadcrumb'] == []][0]
+                    stream_table_mdata_idx = [
+                        i
+                        for i, md in enumerate(stream['metadata'])
+                        if md['breadcrumb'] == []
+                    ][0]
                 except Exception as exc:
-                    raise Exception(f'Metadata of stream {tap_stream_id} doesn\'t have an empty breadcrumb') from exc
+                    raise Exception(
+                        f'Metadata of stream {tap_stream_id} doesn\'t have an empty breadcrumb'
+                    ) from exc
 
                 if tap_stream_sel:
-                    self.logger.debug('Mark %s tap_stream_id as selected with properties %s', tap_stream_id,
-                                      tap_stream_sel)
-                    schema['streams'][stream_idx]['metadata'][stream_table_mdata_idx]['metadata']['selected'] = True
+                    self.logger.debug(
+                        'Mark %s tap_stream_id as selected with properties %s',
+                        tap_stream_id,
+                        tap_stream_sel,
+                    )
+                    schema['streams'][stream_idx]['metadata'][stream_table_mdata_idx][
+                        'metadata'
+                    ]['selected'] = True
                     if 'replication_method' in tap_stream_sel:
-                        schema['streams'][stream_idx]['metadata'][stream_table_mdata_idx]['metadata'][
-                            'replication-method'] = tap_stream_sel['replication_method']
+                        schema['streams'][stream_idx]['metadata'][
+                            stream_table_mdata_idx
+                        ]['metadata']['replication-method'] = tap_stream_sel[
+                            'replication_method'
+                        ]
                     if 'replication_key' in tap_stream_sel:
-                        schema['streams'][stream_idx]['metadata'][stream_table_mdata_idx]['metadata'][
-                            'replication-key'] = tap_stream_sel['replication_key']
+                        schema['streams'][stream_idx]['metadata'][
+                            stream_table_mdata_idx
+                        ]['metadata']['replication-key'] = tap_stream_sel[
+                            'replication_key'
+                        ]
                 else:
-                    self.logger.debug('Mark %s tap_stream_id as not selected', tap_stream_id)
-                    schema['streams'][stream_idx]['metadata'][stream_table_mdata_idx]['metadata']['selected'] = False
+                    self.logger.debug(
+                        'Mark %s tap_stream_id as not selected', tap_stream_id
+                    )
+                    schema['streams'][stream_idx]['metadata'][stream_table_mdata_idx][
+                        'metadata'
+                    ]['selected'] = False
 
         return schema
 
@@ -599,7 +751,9 @@ class PipelineWise:
 
         # Create project dir if not exists
         if os.path.exists(project_dir):
-            self.logger.error('Directory exists and cannot create new project: %s', self.args.name)
+            self.logger.error(
+                'Directory exists and cannot create new project: %s', self.args.name
+            )
             sys.exit(1)
         else:
             os.mkdir(project_dir)
@@ -621,7 +775,13 @@ class PipelineWise:
         target_id = self.target['id']
         target_type = self.target['type']
 
-        self.logger.info('Testing %s (%s) tap connection in %s (%s) target', tap_id, tap_type, target_id, target_type)
+        self.logger.info(
+            'Testing %s (%s) tap connection in %s (%s) target',
+            tap_id,
+            tap_type,
+            target_id,
+            target_type,
+        )
 
         # Generate and run the command to run the tap directly
         # We will use the discover option to test connection
@@ -639,15 +799,21 @@ class PipelineWise:
         returncode, new_schema, tap_output = result
 
         if returncode != 0:
-            self.logger.error('Testing tap connection (%s - %s) FAILED', target_id, tap_id)
+            self.logger.error(
+                'Testing tap connection (%s - %s) FAILED', target_id, tap_id
+            )
             sys.exit(1)
 
         # If the connection success then the response needs to be a valid JSON string
         if not utils.is_json(new_schema):
-            self.logger.error('Schema discovered by %s (%s) is not a valid JSON.', tap_id, tap_type)
+            self.logger.error(
+                'Schema discovered by %s (%s) is not a valid JSON.', tap_id, tap_type
+            )
             sys.exit(1)
         else:
-            self.logger.info('Testing tap connection (%s - %s) PASSED', target_id, tap_id)
+            self.logger.info(
+                'Testing tap connection (%s - %s) PASSED', target_id, tap_id
+            )
 
     # pylint: disable=too-many-locals,inconsistent-return-statements
     def discover_tap(self, tap=None, target=None):
@@ -673,7 +839,13 @@ class PipelineWise:
         target_id = target.get('id')
         target_type = target.get('type')
 
-        self.logger.info('Discovering %s (%s) tap in %s (%s) target...', tap_id, tap_type, target_id, target_type)
+        self.logger.info(
+            'Discovering %s (%s) tap in %s (%s) target...',
+            tap_id,
+            tap_type,
+            target_id,
+            target_type,
+        )
 
         # Generate and run the command to run the tap directly
         command = f'{tap_bin} --config {tap_config_file} --discover'
@@ -709,25 +881,33 @@ class PipelineWise:
 
         # Make selection from selection.json if exists
         try:
-            schema_with_diff = self.make_default_selection(schema_with_diff, tap_selection_file)
+            schema_with_diff = self.make_default_selection(
+                schema_with_diff, tap_selection_file
+            )
             schema_with_diff = utils.delete_keys_from_dict(
                 self.make_default_selection(schema_with_diff, tap_selection_file),
-
                 # Removing multipleOf json schema validations from properties.json,
                 # that's causing run time issues
-                ['multipleOf'])
+                ['multipleOf'],
+            )
 
         except Exception as exc:
             return f'Cannot load selection JSON at {tap_selection_file}. {str(exc)}'
 
         # Post import checks
-        post_import_errors = self._run_post_import_tap_checks(tap, schema_with_diff, target_id)
+        post_import_errors = self._run_post_import_tap_checks(
+            tap, schema_with_diff, target_id
+        )
         if len(post_import_errors) > 0:
-            return f'Post import tap checks failed in tap {tap_id}: {post_import_errors}'
+            return (
+                f'Post import tap checks failed in tap {tap_id}: {post_import_errors}'
+            )
 
         # Save the new catalog into the tap
         try:
-            self.logger.info('Writing new properties file with changes into %s', tap_properties_file)
+            self.logger.info(
+                'Writing new properties file with changes into %s', tap_properties_file
+            )
             utils.save_json(schema_with_diff, tap_properties_file)
         except Exception as exc:
             return f'Cannot save file. {str(exc)}'
@@ -739,11 +919,11 @@ class PipelineWise:
         self.logger.debug('Detecting %s tap status in %s target', tap_id, target_id)
         tap_dir = self.get_tap_dir(target_id, tap_id)
         log_dir = self.get_tap_log_dir(target_id, tap_id)
-        connector_files = self.get_connector_files(tap_dir)
+        connector_files = Config.get_connector_files(tap_dir)
         status = {
             'currentStatus': 'unknown',
             'lastStatus': 'unknown',
-            'lastTimestamp': None
+            'lastTimestamp': None,
         }
 
         # Tap exists but configuration not completed
@@ -751,7 +931,10 @@ class PipelineWise:
             status['currentStatus'] = 'not-configured'
 
         # Tap exists and has log in running status
-        elif os.path.isdir(log_dir) and len(utils.search_files(log_dir, patterns=['*.log.running'])) > 0:
+        elif (
+            os.path.isdir(log_dir)
+            and len(utils.search_files(log_dir, patterns=['*.log.running'])) > 0
+        ):
             status['currentStatus'] = 'running'
 
         # Configured and not running
@@ -760,7 +943,9 @@ class PipelineWise:
 
         # Get last run instance
         if os.path.isdir(log_dir):
-            log_files = utils.search_files(log_dir, patterns=['*.log.success', '*.log.failed'], sort=True)
+            log_files = utils.search_files(
+                log_dir, patterns=['*.log.success', '*.log.failed'], sort=True
+            )
             if len(log_files) > 0:
                 last_log_file = log_files[0]
                 log_attr = utils.extract_log_attributes(last_log_file)
@@ -783,7 +968,7 @@ class PipelineWise:
             'Enabled',
             'Status',
             'Last Sync',
-            'Last Sync Result'
+            'Last Sync Result',
         ]
         tab_body = []
         pipelines = 0
@@ -791,44 +976,55 @@ class PipelineWise:
             taps = self.get_taps(target['id'])
 
             for tap in taps:
-                tab_body.append([
-                    tap.get('id', '<Unknown>'),
-                    tap.get('type', '<Unknown>'),
-                    target.get('id', '<Unknown>'),
-                    target.get('type', '<Unknown>'),
-                    tap.get('enabled', '<Unknown>'),
-                    tap.get('status', {}).get('currentStatus', '<Unknown>'),
-                    tap.get('status', {}).get('lastTimestamp', '<Unknown>'),
-                    tap.get('status', {}).get('lastStatus', '<Unknown>')
-                ])
+                tab_body.append(
+                    [
+                        tap.get('id', '<Unknown>'),
+                        tap.get('type', '<Unknown>'),
+                        target.get('id', '<Unknown>'),
+                        target.get('type', '<Unknown>'),
+                        tap.get('enabled', '<Unknown>'),
+                        tap.get('status', {}).get('currentStatus', '<Unknown>'),
+                        tap.get('status', {}).get('lastTimestamp', '<Unknown>'),
+                        tap.get('status', {}).get('lastStatus', '<Unknown>'),
+                    ]
+                )
                 pipelines += 1
 
         print(tabulate(tab_body, headers=tab_headers, tablefmt='simple'))
         print(f'{pipelines} pipeline(s)')
 
-    def run_tap_singer(self,
-                       tap: TapParams,
-                       target: TargetParams,
-                       transform: TransformParams,
-                       stream_buffer_size: int = 0) -> str:
+    def run_tap_singer(
+        self,
+        tap: TapParams,
+        target: TargetParams,
+        transform: TransformParams,
+        stream_buffer_size: int = 0,
+    ) -> str:
         """
         Generate and run piped shell command to sync tables using singer taps and targets
         """
         # Build the piped executable command
-        command = commands.build_singer_command(tap=tap,
-                                                target=target,
-                                                transform=transform,
-                                                stream_buffer_size=stream_buffer_size,
-                                                stream_buffer_log_file=self.tap_run_log_file,
-                                                profiling_mode=self.profiling_mode,
-                                                profiling_dir=self.profiling_dir)
+        command = commands.build_singer_command(
+            tap=tap,
+            target=target,
+            transform=transform,
+            stream_buffer_size=stream_buffer_size,
+            stream_buffer_log_file=self.tap_run_log_file,
+            profiling_mode=self.profiling_mode,
+            profiling_dir=self.profiling_dir,
+        )
 
         # Do not run if another instance is already running
         log_dir = os.path.dirname(self.tap_run_log_file)
-        if os.path.isdir(log_dir) and len(utils.search_files(log_dir, patterns=['*.log.running'])) > 0:
+        if (
+            os.path.isdir(log_dir)
+            and len(utils.search_files(log_dir, patterns=['*.log.running'])) > 0
+        ):
             self.logger.info(
                 'Failed to run. Another instance of the same tap is already running. '
-                'Log file detected in running status at %s', log_dir)
+                'Log file detected in running status at %s',
+                log_dir,
+            )
             sys.exit(1)
 
         start = None
@@ -842,7 +1038,7 @@ class PipelineWise:
                 nonlocal start, state
 
                 if start is None or time() - start >= 2:
-                    with open(tap.state, 'w') as state_file:
+                    with open(tap.state, 'w', encoding='utf-8') as state_file:
                         state_file.write(line)
 
                     # Update start time to be the current time.
@@ -864,36 +1060,47 @@ class PipelineWise:
 
         # Run command with update_state_file as a callback to call for every stdout line
         if self.extra_log:
-            commands.run_command(command, self.tap_run_log_file, update_state_file_with_extra_log)
+            commands.run_command(
+                command, self.tap_run_log_file, update_state_file_with_extra_log
+            )
         else:
             commands.run_command(command, self.tap_run_log_file, update_state_file)
 
         # update the state file one last time to make sure it always has the last state message.
         if state is not None:
-            with open(tap.state, 'w') as statefile:
+            with open(tap.state, 'w', encoding='utf-8') as statefile:
                 statefile.write(state)
 
-    def run_tap_fastsync(self, tap: TapParams, target: TargetParams, transform: TransformParams):
+    def run_tap_fastsync(
+        self, tap: TapParams, target: TargetParams, transform: TransformParams
+    ):
         """
         Generating and running shell command to sync tables using the native fastsync components
         """
         # Build the fastsync executable command
-        command = commands.build_fastsync_command(tap=tap,
-                                                  target=target,
-                                                  transform=transform,
-                                                  venv_dir=self.venv_dir,
-                                                  temp_dir=self.get_temp_dir(),
-                                                  tables=self.args.tables,
-                                                  profiling_mode=self.profiling_mode,
-                                                  profiling_dir=self.profiling_dir,
-                                                  drop_pg_slot=self.drop_pg_slot)
+        command = commands.build_fastsync_command(
+            tap=tap,
+            target=target,
+            transform=transform,
+            venv_dir=self.venv_dir,
+            temp_dir=self.get_temp_dir(),
+            tables=self.args.tables,
+            profiling_mode=self.profiling_mode,
+            profiling_dir=self.profiling_dir,
+            drop_pg_slot=self.drop_pg_slot,
+        )
 
         # Do not run if another instance is already running
         log_dir = os.path.dirname(self.tap_run_log_file)
-        if os.path.isdir(log_dir) and len(utils.search_files(log_dir, patterns=['*.log.running'])) > 0:
+        if (
+            os.path.isdir(log_dir)
+            and len(utils.search_files(log_dir, patterns=['*.log.running'])) > 0
+        ):
             self.logger.info(
                 'Failed to run. Another instance of the same tap is already running. '
-                'Log file detected in running status at %s', log_dir)
+                'Log file detected in running status at %s',
+                log_dir,
+            )
             sys.exit(1)
 
         # Fastsync is running in subprocess.
@@ -905,7 +1112,9 @@ class PipelineWise:
 
         if self.extra_log:
             # Run command and copy fastsync output to main logger
-            commands.run_command(command, self.tap_run_log_file, add_fastsync_output_to_main_logger)
+            commands.run_command(
+                command, self.tap_run_log_file, add_fastsync_output_to_main_logger
+            )
         else:
             # Run command
             commands.run_command(command, self.tap_run_log_file)
@@ -934,7 +1143,9 @@ class PipelineWise:
         tap_type = self.tap['type']
         target_id = self.target['id']
         target_type = self.target['type']
-        stream_buffer_size = self.tap.get('stream_buffer_size', commands.DEFAULT_STREAM_BUFFER_SIZE)
+        stream_buffer_size = self.tap.get(
+            'stream_buffer_size', commands.DEFAULT_STREAM_BUFFER_SIZE
+        )
 
         self.logger.info('Running %s tap in %s target', tap_id, target_id)
 
@@ -959,7 +1170,9 @@ class PipelineWise:
 
         # Some target attributes can be passed and override by tap (aka. inheritable config)
         # We merge the two configs and use that with the target
-        cons_target_config = self.create_consumable_target_config(target_config, tap_inheritable_config)
+        cons_target_config = self.create_consumable_target_config(
+            target_config, tap_inheritable_config
+        )
 
         # Output will be redirected into target and tap specific log directory
         log_dir = self.get_tap_log_dir(target_id, tap_id)
@@ -971,128 +1184,165 @@ class PipelineWise:
             tap_properties_fastsync,
             fastsync_stream_ids,
             tap_properties_singer,
-            singer_stream_ids
+            singer_stream_ids,
         ) = self.create_filtered_tap_properties(
-            target_type,
-            tap_type,
+            ConnectorType(target_type),
+            ConnectorType(tap_type),
             tap_properties,
-            tap_state, {
+            tap_state,
+            {
                 'selected': True,
-                'target_type': ['target-snowflake', 'target-redshift', 'target-postgres', 'target-bigquery'],
-                'tap_type': ['tap-mysql', 'tap-postgres', 'tap-s3-csv', 'tap-mongodb'],
-                'initial_sync_required': True
+                'tap_target_pairs': FASTSYNC_PAIRS,
+                'initial_sync_required': True,
             },
-            create_fallback=True)
+            create_fallback=True,
+        )
 
         start_time = datetime.now()
         try:
             with pidfile.PIDFile(self.tap['files']['pidfile']):
-                target_params = TargetParams(id=target_id,
-                                             type=target_type,
-                                             bin=self.target_bin,
-                                             python_bin=self.target_python_bin,
-                                             config=cons_target_config)
+                target_params = TargetParams(
+                    target_id=target_id,
+                    type=target_type,
+                    bin=self.target_bin,
+                    python_bin=self.target_python_bin,
+                    config=cons_target_config,
+                )
 
-                transform_params = TransformParams(bin=self.transform_field_bin,
-                                                   python_bin=self.transform_field_python_bin,
-                                                   config=tap_transformation,
-                                                   tap_id=tap_id,
-                                                   target_id=target_id)
+                transform_params = TransformParams(
+                    bin=self.transform_field_bin,
+                    python_bin=self.transform_field_python_bin,
+                    config=tap_transformation,
+                    tap_id=tap_id,
+                    target_id=target_id,
+                )
 
                 # Run fastsync for FULL_TABLE replication method
                 if len(fastsync_stream_ids) > 0:
-                    self.logger.info('Table(s) selected to sync by fastsync: %s', fastsync_stream_ids)
-                    self.tap_run_log_file = os.path.join(log_dir, f'{target_id}-{tap_id}-{current_time}.fastsync.log')
-                    tap_params = TapParams(id=tap_id,
-                                           type=tap_type,
-                                           bin=self.tap_bin,
-                                           python_bin=self.tap_python_bin,
-                                           config=tap_config,
-                                           properties=tap_properties_fastsync,
-                                           state=tap_state)
+                    self.logger.info(
+                        'Table(s) selected to sync by fastsync: %s', fastsync_stream_ids
+                    )
+                    self.tap_run_log_file = os.path.join(
+                        log_dir, f'{target_id}-{tap_id}-{current_time}.fastsync.log'
+                    )
+                    tap_params = TapParams(
+                        tap_id=tap_id,
+                        type=tap_type,
+                        bin=self.tap_bin,
+                        python_bin=self.tap_python_bin,
+                        config=tap_config,
+                        properties=tap_properties_fastsync,
+                        state=tap_state,
+                    )
 
-                    self.run_tap_fastsync(tap=tap_params,
-                                          target=target_params,
-                                          transform=transform_params)
+                    self.run_tap_fastsync(
+                        tap=tap_params, target=target_params, transform=transform_params
+                    )
                 else:
-                    self.logger.info('No table available that needs to be sync by fastsync')
+                    self.logger.info(
+                        'No table available that needs to be sync by fastsync'
+                    )
 
                 # Run singer tap for INCREMENTAL and LOG_BASED replication methods
                 if len(singer_stream_ids) > 0:
-                    self.logger.info('Table(s) selected to sync by singer: %s', singer_stream_ids)
-                    self.tap_run_log_file = os.path.join(log_dir, f'{target_id}-{tap_id}-{current_time}.singer.log')
-                    tap_params = TapParams(id=tap_id,
-                                           type=tap_type,
-                                           bin=self.tap_bin,
-                                           python_bin=self.tap_python_bin,
-                                           config=tap_config,
-                                           properties=tap_properties_singer,
-                                           state=tap_state)
+                    self.logger.info(
+                        'Table(s) selected to sync by singer: %s', singer_stream_ids
+                    )
+                    self.tap_run_log_file = os.path.join(
+                        log_dir, f'{target_id}-{tap_id}-{current_time}.singer.log'
+                    )
+                    tap_params = TapParams(
+                        tap_id=tap_id,
+                        type=tap_type,
+                        bin=self.tap_bin,
+                        python_bin=self.tap_python_bin,
+                        config=tap_config,
+                        properties=tap_properties_singer,
+                        state=tap_state,
+                    )
 
-                    self.run_tap_singer(tap=tap_params,
-                                        target=target_params,
-                                        transform=transform_params,
-                                        stream_buffer_size=stream_buffer_size)
+                    self.run_tap_singer(
+                        tap=tap_params,
+                        target=target_params,
+                        transform=transform_params,
+                        stream_buffer_size=stream_buffer_size,
+                    )
                 else:
-                    self.logger.info('No table available that needs to be sync by singer')
+                    self.logger.info(
+                        'No table available that needs to be sync by singer'
+                    )
 
         except pidfile.AlreadyRunningError:
             self.logger.error('Another instance of the tap is already running.')
-            utils.silentremove(cons_target_config)
-            utils.silentremove(tap_properties_fastsync)
-            utils.silentremove(tap_properties_singer)
             sys.exit(1)
         # Delete temp files if there is any
         except commands.RunCommandException as exc:
             self.logger.exception(exc)
-            utils.silentremove(cons_target_config)
-            utils.silentremove(tap_properties_fastsync)
-            utils.silentremove(tap_properties_singer)
             self._print_tap_run_summary(self.STATUS_FAILED, start_time, datetime.now())
             self.send_alert(message=f'{tap_id} tap failed', exc=exc)
             sys.exit(1)
         except Exception as exc:
-            utils.silentremove(cons_target_config)
-            utils.silentremove(tap_properties_fastsync)
-            utils.silentremove(tap_properties_singer)
             self._print_tap_run_summary(self.STATUS_FAILED, start_time, datetime.now())
             self.send_alert(message=f'{tap_id} tap failed', exc=exc)
             raise exc
-
-        utils.silentremove(cons_target_config)
-        utils.silentremove(tap_properties_fastsync)
-        utils.silentremove(tap_properties_singer)
+        finally:
+            utils.silentremove(cons_target_config)
+            utils.silentremove(tap_properties_fastsync)
+            utils.silentremove(tap_properties_singer)
         self._print_tap_run_summary(self.STATUS_SUCCESS, start_time, datetime.now())
 
-    def stop_tap(self):
+    # pylint: disable=unused-argument
+    def stop_tap(self, sig=None, frame=None):
         """
         Stop running tap
 
         The command finds the tap specific pidfile that was created by run_tap command and sends
-        a SIGINT to the process. The SIGINT signal triggers _exit_gracefully function automatically and
-        the tap stops running.
+        a SIGTERM to the process.
         """
+        self.logger.info('Trying to stop tap gracefully...')
         pidfile_path = self.tap['files']['pidfile']
         try:
-            with open(pidfile_path) as pidf:
+            with open(pidfile_path, encoding='utf-8') as pidf:
                 pid = int(pidf.read())
+                pgid = os.getpgid(pid)
                 parent = psutil.Process(pid)
 
-                # Terminate child processes
+                # Terminate all the processes in the current process' process group.
                 for child in parent.children(recursive=True):
-                    self.logger.info('Sending SIGINT to child pid %s...', child.pid)
-                    child.send_signal(signal.SIGINT)
+                    if os.getpgid(child.pid) == pgid:
+                        self.logger.info('Sending SIGTERM to child pid %s...', child.pid)
+                        child.terminate()
+                        try:
+                            child.wait(timeout=5)
+                        except psutil.TimeoutExpired:
+                            child.kill()
 
-                # Terminate main process
-                self.logger.info('Sending SIGINT to main pid %s...', parent.pid)
-                parent.send_signal(signal.SIGINT)
         except ProcessLookupError:
-            self.logger.error('Pid %s not found. Is the tap running on this machine? '
-                              'Stopping taps remotely is not supported.', pid)
+            self.logger.error(
+                'Pid %s not found. Is the tap running on this machine? '
+                'Stopping taps remotely is not supported.',
+                pid,
+            )
             sys.exit(1)
+
         except FileNotFoundError:
-            self.logger.error('No pidfile found at %s. Tap does not seem to be running.', pidfile_path)
+            self.logger.error(
+                'No pidfile found at %s. Tap does not seem to be running.', pidfile_path
+            )
             sys.exit(1)
+
+        # Remove pidfile.
+        os.remove(pidfile_path)
+
+        # Rename log files from running to terminated status
+        if self.tap_run_log_file:
+            tap_run_log_file_running = f'{self.tap_run_log_file}.running'
+            tap_run_log_file_terminated = f'{self.tap_run_log_file}.terminated'
+
+            if os.path.isfile(tap_run_log_file_running):
+                os.rename(tap_run_log_file_running, tap_run_log_file_terminated)
+
+        sys.exit(1)
 
     # pylint: disable=too-many-locals
     def sync_tables(self):
@@ -1110,7 +1360,13 @@ class PipelineWise:
         target_type = self.target['type']
         fastsync_bin = utils.get_fastsync_bin(self.venv_dir, tap_type, target_type)
 
-        self.logger.info('Syncing tables from %s (%s) to %s (%s)...', tap_id, tap_type, target_id, target_type)
+        self.logger.info(
+            'Syncing tables from %s (%s) to %s (%s)...',
+            tap_id,
+            tap_type,
+            target_id,
+            target_type,
+        )
 
         # Run only if tap enabled
         if not self.tap.get('enabled', False):
@@ -1120,15 +1376,22 @@ class PipelineWise:
         # Run only if tap not running
         tap_status = self.detect_tap_status(target_id, tap_id)
         if tap_status['currentStatus'] == 'running':
-            self.logger.info('Tap %s is currently running and cannot sync. Stop the tap and try again.',
-                             self.tap['name'])
+            self.logger.info(
+                'Tap %s is currently running and cannot sync. Stop the tap and try again.',
+                self.tap['name'],
+            )
             sys.exit(1)
 
         # Tap exists but configuration not completed
         if not os.path.isfile(fastsync_bin):
-            self.logger.error('Table sync function is not implemented from %s datasources to %s type of targets',
-                              tap_type, target_type)
+            self.logger.error(
+                'Table sync function is not implemented from %s datasources to %s type of targets',
+                tap_type,
+                target_type,
+            )
             sys.exit(1)
+
+        self._cleanup_tap_state_file()
 
         # Generate and run the command to run the tap directly
         tap_config = self.tap['files']['config']
@@ -1144,7 +1407,9 @@ class PipelineWise:
 
         # Some target attributes can be passed and override by tap (aka. inheritable config)
         # We merge the two configs and use that with the target
-        cons_target_config = self.create_consumable_target_config(target_config, tap_inheritable_config)
+        cons_target_config = self.create_consumable_target_config(
+            target_config, tap_inheritable_config
+        )
 
         # Output will be redirected into target and tap specific log directory
         log_dir = self.get_tap_log_dir(target_id, tap_id)
@@ -1153,24 +1418,27 @@ class PipelineWise:
         # sync_tables command always using fastsync
         try:
             with pidfile.PIDFile(self.tap['files']['pidfile']):
-                self.tap_run_log_file = os.path.join(log_dir, f'{target_id}-{tap_id}-{current_time}.fastsync.log')
+                self.tap_run_log_file = os.path.join(
+                    log_dir, f'{target_id}-{tap_id}-{current_time}.fastsync.log'
+                )
 
                 # Create parameters as NamedTuples
                 tap_params = TapParams(
-                    id=tap_id,
+                    tap_id=tap_id,
                     type=tap_type,
                     bin=self.tap_bin,
                     python_bin=self.tap_python_bin,
                     config=tap_config,
                     properties=tap_properties,
-                    state=tap_state)
+                    state=tap_state,
+                )
 
                 target_params = TargetParams(
-                    id=target_id,
+                    target_id=target_id,
                     type=target_type,
                     bin=self.target_bin,
                     python_bin=self.target_python_bin,
-                    config=cons_target_config
+                    config=cons_target_config,
                 )
 
                 transform_params = TransformParams(
@@ -1178,29 +1446,26 @@ class PipelineWise:
                     config=tap_transformation,
                     python_bin=self.transform_field_python_bin,
                     tap_id=tap_id,
-                    target_id=target_id
+                    target_id=target_id,
                 )
 
-                self.run_tap_fastsync(tap=tap_params,
-                                      target=target_params,
-                                      transform=transform_params)
+                self.run_tap_fastsync(
+                    tap=tap_params, target=target_params, transform=transform_params
+                )
 
         except pidfile.AlreadyRunningError:
             self.logger.error('Another instance of the tap is already running.')
-            utils.silentremove(cons_target_config)
             sys.exit(1)
         # Delete temp file if there is any
         except commands.RunCommandException as exc:
             self.logger.exception(exc)
-            utils.silentremove(cons_target_config)
             self.send_alert(message=f'Failed to sync tables in {tap_id} tap', exc=exc)
             sys.exit(1)
         except Exception as exc:
-            utils.silentremove(cons_target_config)
             self.send_alert(message=f'Failed to sync tables in {tap_id} tap', exc=exc)
             raise exc
-
-        utils.silentremove(cons_target_config)
+        finally:
+            utils.silentremove(cons_target_config)
 
     def validate(self):
         """
@@ -1209,6 +1474,7 @@ class PipelineWise:
         yaml_dir = self.args.dir
         self.logger.info('Searching YAML config files in %s', yaml_dir)
         tap_yamls, target_yamls = utils.get_tap_target_names(yaml_dir)
+
         self.logger.info('Detected taps: %s', tap_yamls)
         self.logger.info('Detected targets: %s', target_yamls)
 
@@ -1217,37 +1483,74 @@ class PipelineWise:
 
         vault_secret = self.args.secret
 
-        target_ids = set()
+        # dictionary of targets ID and type
+        targets = {}
+
         # Validate target json schemas and that no duplicate IDs exist
         for yaml_file in target_yamls:
-            self.logger.info('Started validating %s', yaml_file)
-            loaded_yaml = utils.load_yaml(os.path.join(yaml_dir, yaml_file), vault_secret)
-            utils.validate(loaded_yaml, target_schema)
+            self.logger.info('Started validating target file: %s', yaml_file)
 
-            if loaded_yaml['id'] in target_ids:
-                self.logger.error('Duplicate target found "%s"', loaded_yaml['id'])
-                sys.exit(1)
+            # pylint: disable=E1136  # False positive when loading vault encrypted YAML
+            target_yml = utils.load_yaml(os.path.join(yaml_dir, yaml_file), vault_secret)
+            utils.validate(target_yml, target_schema)
 
-            target_ids.add(loaded_yaml['id'])
-            self.logger.info('Finished validating %s', yaml_file)
+            if target_yml['id'] in targets:
+                raise DuplicateConfigException(f'Duplicate target found "{target_yml["id"]}"')
+
+            targets[target_yml['id']] = target_yml['type']
+
+            self.logger.info('Finished validating target file: %s', yaml_file)
 
         tap_ids = set()
+
         # Validate tap json schemas, check that every tap has valid 'target' and that no duplicate IDs exist
         for yaml_file in tap_yamls:
-            self.logger.info('Started validating %s', yaml_file)
-            loaded_yaml = utils.load_yaml(os.path.join(yaml_dir, yaml_file), vault_secret)
-            utils.validate(loaded_yaml, tap_schema)
+            self.logger.info('Started validating %s ...', yaml_file)
 
-            if loaded_yaml['id'] in tap_ids:
-                self.logger.error('Duplicate tap found "%s"', loaded_yaml['id'])
-                sys.exit(1)
+            # pylint: disable=E1136  # False positive when loading vault encrypted YAML
+            tap_yml = utils.load_yaml(os.path.join(yaml_dir, yaml_file), vault_secret)
+            utils.validate(tap_yml, tap_schema)
 
-            if loaded_yaml['target'] not in target_ids:
-                self.logger.error("Can'f find the target with the ID '%s' referenced in '%s'. Available target IDs: %s",
-                                  loaded_yaml['target'], yaml_file, target_ids)
-                sys.exit(1)
+            if tap_yml['id'] in tap_ids:
+                raise DuplicateConfigException(f'Duplicate tap found "{tap_yml["id"]}"')
 
-            tap_ids.add(loaded_yaml['id'])
+            if tap_yml['target'] not in targets:
+                raise InvalidConfigException(
+                    f"Can't find the target with the ID '{tap_yml['target']}' referenced in '{yaml_file}'."
+                    f'Available target IDs: {list(targets.keys())}',
+                    )
+
+            tap_ids.add(tap_yml['id'])
+
+            # If there is a fastsync component for this tap-target combo and transformations on json properties are
+            # configured then fail the validation.
+            # The reason being that at the time of writing this, transformations in Fastsync are done on the
+            # target side using mostly SQL UPDATE, and transformations on properties in json fields are not
+            # implemented due to the need of converting XPATH syntax to SQL which has been deemed as not worth it
+            if self.__does_fastsync_component_exist(targets[tap_yml['target']], tap_yml['type']):
+                self.logger.debug('FastSync component found for tap %s', tap_yml['id'])
+
+                # Load the transformations
+                transformations = Config.generate_transformations(tap_yml)
+
+                # check if transformations are using "field_paths" or "field_path" config, fail if so
+                for transformation in transformations:
+                    if transformation.get('field_paths') is not None:
+                        raise InvalidTransformationException(
+                            'This tap-target combo has FastSync component and is configuring a transformation on json '
+                            'properties which are not supported by FastSync!\n'
+                            f'Please omit "field_paths" from the transformation config of tap "{tap_yml["id"]}"'
+                        )
+
+                    if transformation['when'] is not None:
+                        for condition in transformation['when']:
+                            if condition.get('field_path') is not None:
+                                raise InvalidTransformationException(
+                                    'This tap-target combo has FastSync component and is configuring a transformation '
+                                    'conditions on json properties which are not supported by FastSync!\n'
+                                    f'Please omit "field_path" from the transformation config of tap "{tap_yml["id"]}"'
+                                )
+
             self.logger.info('Finished validating %s', yaml_file)
 
         self.logger.info('Validation successful')
@@ -1285,11 +1588,17 @@ class PipelineWise:
 
             with parallel_backend('threading', n_jobs=-1):
                 # Discover taps in parallel and return the list of exception of the failed ones
-                discover_excs.extend(list(filter(None,
-                                                 Parallel(verbose=100)(delayed(self.discover_tap)(
-                                                     tap=tap,
-                                                     target=target
-                                                 ) for tap in target.get('taps')))))
+                discover_excs.extend(
+                    list(
+                        filter(
+                            None,
+                            Parallel(verbose=100)(
+                                delayed(self.discover_tap)(tap=tap, target=target)
+                                for tap in target.get('taps')
+                            ),
+                        )
+                    )
+                )
 
         # Log summary
         end_time = datetime.now()
@@ -1310,7 +1619,7 @@ class PipelineWise:
             total_taps,
             total_taps - len(discover_excs),
             str(discover_excs),
-            end_time - start_time
+            end_time - start_time,
         )
         if len(discover_excs) > 0:
             sys.exit(1)
@@ -1325,7 +1634,9 @@ class PipelineWise:
         print(yaml_text)
         print('Encryption successful')
 
-    def _is_initial_sync_required(self, replication_method: str, stream_bookmark: Dict) -> bool:
+    def _is_initial_sync_required(
+        self, replication_method: str, stream_bookmark: Dict
+    ) -> bool:
         """
             Detects if a stream needs initial sync or not.
             Initial sync is required for INCREMENTAL and LOG_BASED tables
@@ -1343,28 +1654,20 @@ class PipelineWise:
         :param stream_bookmark: stream state bookmark
         :return: Boolean, True if needs initial sync, False otherwise
         """
-        return replication_method == self.FULL_TABLE \
-                or (replication_method == self.INCREMENTAL and
-                    'replication_key_value' not in stream_bookmark and
-                    'modified_since' not in stream_bookmark) \
-                or (replication_method == self.LOG_BASED and
-                    'lsn' not in stream_bookmark and
-                    'log_pos' not in stream_bookmark and
-                    'token' not in stream_bookmark)
-
-    # pylint: disable=unused-argument
-    def _exit_gracefully(self, sig, frame, exit_code=1):
-        self.logger.info('Stopping gracefully...')
-
-        # Rename log files from running to terminated status
-        if self.tap_run_log_file:
-            tap_run_log_file_running = f'{self.tap_run_log_file}.running'
-            tap_run_log_file_terminated = f'{self.tap_run_log_file}.terminated'
-
-            if os.path.isfile(tap_run_log_file_running):
-                os.rename(tap_run_log_file_running, tap_run_log_file_terminated)
-
-        sys.exit(exit_code)
+        return (
+            replication_method == self.FULL_TABLE
+            or (
+                replication_method == self.INCREMENTAL
+                and 'replication_key_value' not in stream_bookmark
+                and 'modified_since' not in stream_bookmark
+            )
+            or (
+                replication_method == self.LOG_BASED
+                and 'lsn' not in stream_bookmark
+                and 'log_pos' not in stream_bookmark
+                and 'token' not in stream_bookmark
+            )
+        )
 
     def _print_tap_run_summary(self, status, start_time, end_time):
         summary = f"""
@@ -1393,11 +1696,13 @@ TAP RUN SUMMARY
 
             # Append the summary to the right log file
             if log_file_to_write_summary:
-                with open(log_file_to_write_summary, 'a') as logfile:
+                with open(log_file_to_write_summary, 'a', encoding='utf-8') as logfile:
                     logfile.write(summary)
 
     # pylint: disable=unused-variable
-    def _run_post_import_tap_checks(self, tap: Dict, catalog: Dict, target_id: str) -> List:
+    def _run_post_import_tap_checks(
+        self, tap: Dict, catalog: Dict, target_id: str
+    ) -> List:
         """
         Run post import checks on a tap.
 
@@ -1409,10 +1714,8 @@ TAP RUN SUMMARY
         errors = []
 
         error = self.__validate_transformations(
-            tap.get('files', {}).get('transformation'),
-            catalog,
-            tap['id'],
-            target_id)
+            tap.get('files', {}).get('transformation'), catalog, tap['id'], target_id
+        )
 
         if error:
             errors.append(error)
@@ -1436,19 +1739,50 @@ TAP RUN SUMMARY
             primary_key_required = tap.get('primary_key_required', True)
 
             # Check if primary key is set for INCREMENTAL and LOG_BASED replications
-            if (selected and replication_method in [self.INCREMENTAL, self.LOG_BASED] and
-                    len(table_key_properties) == 0 and primary_key_required):
-                errors.append(f'No primary key set for {tap_stream_id} stream ({replication_method})')
+            if (
+                selected
+                and replication_method in [self.INCREMENTAL, self.LOG_BASED]
+                and len(table_key_properties) == 0
+                and primary_key_required
+            ):
+                errors.append(
+                    f'No primary key set for {tap_stream_id} stream ({replication_method})'
+                )
                 break
 
         return errors
 
+    def _cleanup_tap_state_file(self) -> None:
+        tables = self.args.tables
+        state_file = self.tap['files']['state']
+        if tables:
+            self._clean_tables_from_bookmarks_in_state_file(state_file, tables)
+        else:
+            utils.silentremove(state_file)
+
+    @staticmethod
+    def _clean_tables_from_bookmarks_in_state_file(state_file_to_clean: str, tables: str) -> None:
+        try:
+            with open(state_file_to_clean, 'r+', encoding='UTF-8') as state_file:
+                state_data = json.load(state_file)
+                bookmarks = state_data.get('bookmarks')
+                list_of_tables = tables.split(',')
+                if bookmarks:
+                    for table_name in list_of_tables:
+                        bookmarks.pop(table_name, None)
+
+                state_file.seek(0)
+                json.dump(state_data, state_file)
+                state_file.truncate()
+
+        except FileNotFoundError:
+            pass
+        except json.JSONDecodeError:
+            pass
+
     def __validate_transformations(
-            self,
-            transformation_file: str,
-            catalog: Dict,
-            tap_id: str,
-            target_id: str) -> Optional[str]:
+        self, transformation_file: str, catalog: Dict, tap_id: str, target_id: str
+    ) -> Optional[str]:
         """
         Run validation of transformation config
         Args:
@@ -1463,9 +1797,9 @@ TAP RUN SUMMARY
 
             # create a temp file with the content being the given catalog object
             # we need this file to execute the validation cli command
-            temp_catalog_file = utils.create_temp_file(dir=self.get_temp_dir(),
-                                                       prefix='properties_',
-                                                       suffix='.json')[1]
+            temp_catalog_file = utils.create_temp_file(
+                dir=self.get_temp_dir(), prefix='properties_', suffix='.json'
+            )[1]
 
             utils.save_json(catalog, temp_catalog_file)
 
@@ -1474,7 +1808,9 @@ TAP RUN SUMMARY
                 """
 
             if self.profiling_mode:
-                dump_file = os.path.join(self.profiling_dir, f'transformation_{tap_id}_{target_id}.pstat')
+                dump_file = os.path.join(
+                    self.profiling_dir, f'transformation_{tap_id}_{target_id}.pstat'
+                )
                 command = f'{self.transform_field_python_bin} -m cProfile -o {dump_file} {command}'
 
             self.logger.debug('Transformation validation command: %s', command)
@@ -1486,3 +1822,16 @@ TAP RUN SUMMARY
 
             if returncode != 0:
                 return stderr
+
+    @classmethod
+    def __does_fastsync_component_exist(cls, target_type: str, tap_type: str) -> bool:
+        """
+        Checks if the given tap-target combo have FastSync
+        Args:
+            target_type: type of the target
+            tap_type: type of tap
+
+        Returns:
+            Boolean, True if FastSync exists, False otherwise.
+        """
+        return ConnectorType(target_type) in FASTSYNC_PAIRS.get(ConnectorType(tap_type), {})

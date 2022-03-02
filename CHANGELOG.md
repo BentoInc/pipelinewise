@@ -1,3 +1,122 @@
+0.41.0 (2022-02-10)
+-------------------
+
+- Dropped support for python 3.6
+- Bump `ujson` from `4.3.0` to `5.1.0`
+- Bump `pipelinewise-tap-s3-csv` to `2.0.0`
+- Fix for config json files
+- Fix: e2e tests fail when SF credentials are not present
+
+0.40.0 (2022-01-27)
+-------------------
+- Bump `pipelinewise-tap-kafka` from `5.0.1` to `5.1.0`
+
+0.39.1 (2022-01-26)
+-------------------
+- Bump `pipelinewise-tap-kafka` from `5.0.0` to `5.0.1`
+
+0.39.0 (2022-01-25)
+-------------------
+- Bump `pipelinewise-tap-kafka` from `4.0.1` to `5.0.0`
+- Bump `pipelinewise-target-bigquery` from `1.1.1` to `1.2.0`
+- Bump `pipelinewise-transform-field` from `2.2.0` to `2.3.0`
+- Prevent usage of extended transformation feature when FastSync exists
+- Fixed fastsync from postgres to bigquery
+- Fixed an issue when `SplitGzipFile` doesn't work with binary mode
+
+0.38.0 (2022-01-14)
+-------------------
+- MySQL tap now connects to replica instance during fastsync if credentials are provided
+- Added fastsync support for MongoDB Atlas
+- Docker base image to Python 3.8
+- Bump `pyyaml` from `5.4.1` to `6.0`
+- Bump `pipelinewise-target-snowflake` from `1.14.1` to `1.15.0`
+- Bump `pipelinewise-tap-s3-csv` from `1.2.2` to `1.2.3`
+- Bump `pipelinewise-tap-postgres` from `1.8.1` to `1.8.2`
+
+0.37.2 (2021-12-10)
+-------------------
+- Bump `pipelinewise-tap-github` from `1.0.2` to `1.0.3`
+
+
+0.37.1 (2021-12-10)
+-------------------
+- Make a postfix for Snowflake schemas in end-to-end tests.
+- Bump `google-cloud-bigquery` from `1.24.0` to `2.31.0` ([Changelog](https://github.com/googleapis/python-bigquery/blob/main/CHANGELOG.md#2310-2021-11-24))
+
+
+0.37.0 (2021-11-19)
+-------------------
+
+*New*
+- Added cleanup method for state file.
+- Bump `pytest-cov` from `2.12.1` to `3.0.0` ([Changelog](https://github.com/pytest-dev/pytest-cov/blob/master/CHANGELOG.rst#300-2021-10-04))
+- Bump `joblib` from `1.0.0` to `1.1.0`
+- Bump `flake8` from `3.9.2` to `4.0.1` 
+- Bump `jinja2` from `3.0.1` to `3.0.2`
+- Bump `python-dotenv` from `0.19.0` to `0.19.1`
+- Bump `target-snowflake` from `1.14.0` to `1.14.1`
+- Bump `ansible` from `4.4.0` to `4.7.0`
+- Bump `pytest` from `6.2.4` to `6.2.5`
+
+*Changes*
+- Fully migrate CI to Github Actions.
+- Update `ujson` requirement from `==4.1.*` to `>=4.1,<4.3`
+- Update `tzlocal` requirement from `<2.2,>=2.0` to `>=2.0,<4.1`
+
+*Fixes*
+- Make process in docker-compose file.
+- proc.info parsing in a case cmdline is None!
+
+
+0.36.0 (2021-09-30)
+-------------------
+
+*New*
+- Add new transformation type: **MASK-STRING-SKIP-ENDS**
+- Bump `pipelinewise-target-snowflake` from `1.13.1` to `1.14.0` ([Changelog](https://github.com/transferwise/pipelinewise-target-snowflake/blob/master/CHANGELOG.md#1140-2021-09-30))
+    - Support `date` property format
+    - Don't log record on failure to avoind exposing data   
+
+*Changes*
+- Use Makefile for installation
+- Enforce PEP8
+
+*Fixes*
+- Dates out of range (with year > 9999) in FastSync from PG. 
+- Bump `pipelinewise-tap-postgres` from `1.8.0` to `1.8.1` ([Changelog](https://github.com/transferwise/pipelinewise-tap-postgres/blob/master/CHANGELOG.md#181-2021-09-23))
+    -  LOG_BASED: Handle dates with year > 9999.
+    -  INCREMENTAL & FULL_TABLE: Avoid processing timestamps arrays as timestamp
+
+- `Decimal` not JSON serializable in FastSync MongoDB
+- Don't use non-existent FastSync for MongoDB-Redshift pipelines.
+
+
+0.35.2 (2021-08-17)
+-------------------
+- Bump `pipelinewise-tap-github` from `1.0.1` to `1.0.2`
+- Update a few vulnerable or outdated dependencies to latest
+
+0.35.1 (2021-08-13)
+-------------------
+- Bump `pipelinewise-tap-github` from `1.0.0` to `1.0.1`
+- Bump `pipelinewise-tap-kafka` from `4.0.0` to `4.0.1`
+- Bump `tap-jira` from `2.0.0` to `2.0.1`
+- Bump `pipelinewise-target-s3-csv` from `1.4.0` to `1.5.0`
+
+0.35.0 (2021-08-04)
+-------------------
+- Support `"none"` as a value for `--connectors` in `install.sh` script to install a stripped down Pipelinewise without any connectors.
+- Optimize Dockerfile
+- Do not log invalid json objects if they fail validation against json schema. 
+- Replace `github-tap` with fork `pipelinewise-tap-github` version `1.0.0` 
+- Add schema validation for github tap
+- Increase batch_size_rows from 1M to 5M
+- Increase split_file_chunk_size_mb from 2500 to 5000
+- Add latest tag to docker image
+- Bump `pipelinewise-tap-s3-csv` from `1.2.1` to `1.2.2`
+- Update pymongo requirement from `<3.12,>=3.10` to `>=3.10,<3.13`
+
 0.34.1 (2021-07-15)
 -------------------
 - Bump `pipelinewise-target-snowflake` from `1.13.0` to `1.13.1`

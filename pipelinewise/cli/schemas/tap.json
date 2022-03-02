@@ -38,13 +38,19 @@
           "type": "object",
           "properties": {
             "column": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1
+            },
+            "field_path": {
+              "type": "string",
+              "minLength": 1
             },
             "equals": {
               "type": ["null", "integer", "string", "boolean", "number"]
             }
           },
-          "required": ["column", "equals"]
+          "required": ["column", "equals"],
+          "additionalProperties": false
         },
         {
           "type": "object",
@@ -54,6 +60,10 @@
             },
             "regex_match": {
               "type": "string"
+            },
+            "field_path": {
+              "type": "string",
+              "minLength": 1
             }
           },
           "required": ["column", "regex_match"]
@@ -122,9 +132,19 @@
     },
     "transformation": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "column": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1
+        },
+        "field_paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
         },
         "type": {
           "type": "string",
@@ -142,7 +162,16 @@
             "HASH-SKIP-FIRST-9",
             "MASK-DATE",
             "MASK-NUMBER",
-            "MASK-HIDDEN"
+            "MASK-HIDDEN",
+            "MASK-STRING-SKIP-ENDS-1",
+            "MASK-STRING-SKIP-ENDS-2",
+            "MASK-STRING-SKIP-ENDS-3",
+            "MASK-STRING-SKIP-ENDS-4",
+            "MASK-STRING-SKIP-ENDS-5",
+            "MASK-STRING-SKIP-ENDS-6",
+            "MASK-STRING-SKIP-ENDS-7",
+            "MASK-STRING-SKIP-ENDS-8",
+            "MASK-STRING-SKIP-ENDS-9"
           ]
         },
         "when": {
@@ -160,6 +189,7 @@
     },
     "s3_csv_mapping": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "search_prefix": {
           "type": "string"
@@ -232,6 +262,67 @@
         }
       },
       "required": ["type"]
+    },
+    "is_tap_github": {
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "enum": ["tap-github"]
+        }
+      }
+    },
+    "tap_github": {
+      "anyOf": [
+        {
+          "not": {
+            "$ref": "#/definitions/is_tap_github"
+          }
+        },
+        {
+          "required": ["db_conn"],
+          "properties": {
+            "db_conn": {
+              "type": "object",
+              "required": ["access_token", "start_date"],
+              "properties": {
+                "access_token": {
+                  "type": "string"
+                },
+                "start_date": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "organization": {
+                  "type": "string"
+                },
+                "repos_include": {
+                  "type": "string"
+                },
+                "repos_exclude": {
+                  "type": "string"
+                },
+                "repository": {
+                  "type": "string"
+                },
+                "include_archived": {
+                  "type": "boolean",
+                  "default": false
+                },
+                "include_disabled": {
+                  "type": "boolean",
+                  "default": false
+                },
+                "max_rate_limit_wait_seconds": {
+                  "type": "integer",
+                  "default": 600,
+                  "minimum": 600,
+                  "maximum": 3600
+                }
+              }
+            }
+          }
+        }
+      ]
     }
   },
   "type": "object",
@@ -293,7 +384,7 @@
     "split_file_max_chunks": {
       "type": "integer",
       "min": 1,
-      "max": 100
+      "max": 99999
     },
     "schemas": {
       "type": "array",
@@ -305,6 +396,9 @@
   "allOf": [
     {
       "$ref": "#/definitions/tap_mongo_implies_ft_and_lb"
+    },
+    {
+      "$ref": "#/definitions/tap_github"
     }
   ],
   "required": [
