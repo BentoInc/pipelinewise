@@ -1,8 +1,9 @@
 import os
 import re
-
-import pipelinewise.cli as cli
 import pytest
+
+from pipelinewise import cli
+from pipelinewise.cli.errors import InvalidConfigException
 
 VIRTUALENVS_DIR = './virtualenvs-dummy'
 
@@ -14,10 +15,8 @@ class TestUtils:
     """
     def assert_json_is_invalid(self, schema, invalid_target):
         """Simple assertion to check if validate function exits with error"""
-        with pytest.raises(SystemExit) as pytest_wrapped_e:
+        with pytest.raises(InvalidConfigException):
             cli.utils.validate(invalid_target, schema)
-        assert pytest_wrapped_e.type == SystemExit
-        assert pytest_wrapped_e.value.code == 1
 
     def test_json_detectors(self):
         """Testing JSON detector functions"""
@@ -270,9 +269,8 @@ class TestUtils:
         # Delete multiple keys from list of nested dictionaries
         assert cli.utils.delete_keys_from_dict(
             [{'foo': 'bar', 'foo2': 'bar2'},
-             {'foo3': {'nested_foo': 'nested_bar', 'nested_foo2': 'nested_bar2'}}], ['foo2', 'nested_foo']) == \
-               [{'foo': 'bar'},
-                {'foo3': {'nested_foo2': 'nested_bar2'}}]
+             {'foo3': {'nested_foo': 'nested_bar', 'nested_foo2': 'nested_bar2'}}],
+            ['foo2', 'nested_foo']) == [{'foo': 'bar'}, {'foo3': {'nested_foo2': 'nested_bar2'}}]
 
     def test_silentremove(self):
         """Test removing functions"""

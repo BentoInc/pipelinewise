@@ -55,7 +55,7 @@ consumes data from taps and do something with it, like load it into a file, API 
 | Tap       | **[Google Analytics](https://github.com/transferwise/pipelinewise-tap-google-analytics)** | Extra | [![PyPI version](https://badge.fury.io/py/pipelinewise-tap-google-analytics.svg)](https://badge.fury.io/py/tap-adwords) | Extracts data from Google Analytics |
 | Tap       | **[Oracle](https://github.com/transferwise/pipelinewise-tap-oracle)** | Extra | [![PyPI version](https://badge.fury.io/py/pipelinewise-tap-oracle.svg)](https://badge.fury.io/py/pipelinewise-tap-oracle) | Extracts data from Oracle databases. Supporting Log-Based, Key-Based Incremental and Full Table replications |
 | Tap       | **[Zuora](https://github.com/transferwise/pipelinewise-tap-zuora)** | Extra | [![PyPI version](https://badge.fury.io/py/pipelinewise-tap-zuora.svg)](https://badge.fury.io/py/pipelinewise-tap-zuora) | Extracts data from Zuora database using AQAA and REST extraction API with Key-Based incremental replications |
-| Tap       | **[GitHub](https://github.com/singer-io/tap-github)** |       | [![PyPI version](https://badge.fury.io/py/tap-github.svg)](https://badge.fury.io/py/tap-github) | Extracts data from GitHub API using Personal Access Token and Key-Based incremental replications |
+| Tap       | **[GitHub](https://github.com/transferwise/pipelinewise-tap-github)** |       | [![PyPI version](https://badge.fury.io/py/pipelinewise-tap-github.svg)](https://badge.fury.io/py/pipelinewise-tap-github) | Extracts data from GitHub API using Personal Access Token and Key-Based incremental replications |
 | Tap       | **[Shopify](https://github.com/singer-io/tap-shopify)** | Extra | [![PyPI version](https://badge.fury.io/py/tap-shopify.svg)](https://badge.fury.io/py/tap-shopify) | Extracts data from Shopify API using Personal App API Password and date based incremental replications |
 | Tap       | **[Slack](https://github.com/transferwise/pipelinewise-tap-slack)** |       | [![PyPI version](https://badge.fury.io/py/pipelinewise-tap-slack.svg)](https://badge.fury.io/py/pipelinewise-tap-slack) | Extracts data from a Slack API using Bot User Token and Key-Based incremental replications |
 | Tap       | **[Mixpanel](https://github.com/transferwise/pipelinewise-tap-mixpanel)** |       | [![PyPI version](https://badge.fury.io/py/pipelinewise-tap-mixpanel.svg)](https://badge.fury.io/py/pipelinewise-tap-mixpanel) | Extracts data from the Mixpanel API. |
@@ -113,13 +113,21 @@ You can run any pipelinewise command at this point. Tutorials to create and run 
     * mongo-tools
     * mbuffer
 
-2. Run the install script that installs the PipelineWise CLI and all supported singer connectors into separate virtual environments:
+2. Run the Makefile that installs the PipelineWise CLI and all supported singer connectors into separate virtual environments:
 
-    ```sh
-    $ ./install.sh --connectors=all
+    ```shell
+    $ make pipelinewise  all_connectors
     ```
-    Press `Y` to accept the license agreement of the required singer components. To automate the installation and accept every license agreement run `./install --acceptlicenses`
-    Use the optional `--connectors=...,...` argument to install only a specific list of singer connectors.
+    Press `Y` to accept the license agreement of the required singer components. To automate the installation and accept every license agreement run:
+    ```shell
+    $ make pipelinewise all_connectors -e pw_acceptlicenses=y
+    ```
+    And to install only a specific list of singer connectors:
+    ```shell
+    $ make connectors -e pw_connector=<connector_1>,<connector_2>
+    ```
+
+   Run `make` or `make -h` to see the help for Makefile and all options.
 
 3. To start the CLI you need to activate the CLI virtual environment and set `PIPELINEWISE_HOME` environment variable:
 
@@ -127,7 +135,7 @@ You can run any pipelinewise command at this point. Tutorials to create and run 
     $ source {ACTUAL_ABSOLUTE_PATH}/.virtualenvs/pipelinewise/bin/activate
     $ export PIPELINEWISE_HOME={ACTUAL_ABSOLUTE_PATH}
     ```
-    (The `ACTUAL_ABSOLUTE_PATH` differs on every system, the install script prints the correct commands once the installation completes)
+    (The `ACTUAL_ABSOLUTE_PATH` differs on every system, running `make -h` prints the correct commands for CLI)
 
 4. Check if the installation was successful by running the `pipelinewise status` command:
 
