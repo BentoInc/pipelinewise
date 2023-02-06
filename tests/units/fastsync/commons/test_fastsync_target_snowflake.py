@@ -72,14 +72,51 @@ class TestFastSyncTargetSnowflake(TestCase):
         self.snowflake.drop_table(
             'test_schema', 'test table with space', is_temporary=True
         )
-        assert self.snowflake.executed_queries == [
+        self.assertListEqual(self.snowflake.executed_queries, [
             'DROP TABLE IF EXISTS test_schema."TEST_TABLE"',
             'DROP TABLE IF EXISTS test_schema."TEST_TABLE_TEMP"',
             'DROP TABLE IF EXISTS test_schema."UPPERCASE_TABLE"',
             'DROP TABLE IF EXISTS test_schema."UPPERCASE_TABLE_TEMP"',
             'DROP TABLE IF EXISTS test_schema."TEST TABLE WITH SPACE"',
             'DROP TABLE IF EXISTS test_schema."TEST TABLE WITH SPACE_TEMP"',
-        ]
+        ])
+
+    def test_merge_tables(self):
+        """Validate if merge tables query is generated correctly"""
+        schema = 'test_schema'
+        source_table = 'source_table'
+        target_table = 'target_table'
+        list_of_columns = ['p1', 'col1', 'p2', 'col2', 'col3']
+        primary_keys = ['p1', 'p2']
+        on_clause = ' AND '.join(
+            [f'"{source_table.upper()}".{p.upper()} = "{target_table.upper()}".{p.upper()}' for p in primary_keys]
+        )
+        update_clause = ', '.join(
+            [f'"{target_table.upper()}".{c.upper()} = "{source_table.upper()}".{c.upper()}' for c in list_of_columns]
+        )
+        columns_for_insert = ', '.join([c.upper() for c in list_of_columns])
+        values = ', '.join([f'"{source_table.upper()}".{c.upper()}' for c in list_of_columns])
+
+        expected_merge_query = f'MERGE INTO {schema}."{target_table.upper()}" USING {schema}."{source_table.upper()}"' \
+                               f' ON {on_clause}' \
+                               f' WHEN MATCHED THEN UPDATE SET {update_clause}' \
+                               f' WHEN NOT MATCHED THEN INSERT ({columns_for_insert})' \
+                               f' VALUES ({values})'
+
+        self.snowflake.merge_tables(schema, source_table, target_table, list_of_columns, primary_keys)
+
+        self.assertListEqual(self.snowflake.executed_queries, [expected_merge_query])
+
+    def test_add_columns(self):
+        """Test add_column method works as expected"""
+        schema = 'test_schema'
+        table = 'test_table'
+        adding_columns = {'col1': 'type1', 'col2': 'type2'}
+        columns_query = ', '.join([f'{col_name} {col_type}' for col_name, col_type in adding_columns.items()])
+        expected_query = f'ALTER TABLE {schema}."{table.upper()}" ADD {columns_query}'
+
+        self.snowflake.add_columns(schema, table, adding_columns)
+        self.assertListEqual(self.snowflake.executed_queries, [expected_query])
 
     def test_create_table(self):
         """Validate if create table queries generated correctly"""
@@ -91,14 +128,15 @@ class TestFastSyncTargetSnowflake(TestCase):
             columns=['"ID" INTEGER', '"TXT" VARCHAR'],
             primary_key=['"ID"'],
         )
-        assert self.snowflake.executed_queries == [
-            'CREATE OR REPLACE TABLE test_schema."TEST_TABLE" ('
+        self.assertListEqual(self.snowflake.executed_queries, [
+            'CREATE OR REPLACE TABLE "TEST_SCHEMA"."TEST_TABLE" ('
             '"ID" INTEGER,"TXT" VARCHAR,'
             '_SDC_EXTRACTED_AT TIMESTAMP_NTZ,'
             '_SDC_BATCHED_AT TIMESTAMP_NTZ,'
             '_SDC_DELETED_AT VARCHAR'
-            ', PRIMARY KEY ("ID"))'
-        ]
+            ', PRIMARY KEY ("ID"))',
+            'alter table "TEST_SCHEMA"."TEST_TABLE" alter column "ID" drop not null;'
+        ])
 
         # Create table with reserved words in table and column names
         self.snowflake.executed_queries = []
@@ -109,12 +147,13 @@ class TestFastSyncTargetSnowflake(TestCase):
             primary_key=['"ID"'],
         )
         assert self.snowflake.executed_queries == [
-            'CREATE OR REPLACE TABLE test_schema."ORDER" ('
+            'CREATE OR REPLACE TABLE "TEST_SCHEMA"."ORDER" ('
             '"ID" INTEGER,"TXT" VARCHAR,"SELECT" VARCHAR,'
             '_SDC_EXTRACTED_AT TIMESTAMP_NTZ,'
             '_SDC_BATCHED_AT TIMESTAMP_NTZ,'
             '_SDC_DELETED_AT VARCHAR'
-            ', PRIMARY KEY ("ID"))'
+            ', PRIMARY KEY ("ID"))',
+            'alter table "TEST_SCHEMA"."ORDER" alter column "ID" drop not null;'
         ]
 
         # Create table with mixed lower and uppercase and space characters
@@ -125,14 +164,15 @@ class TestFastSyncTargetSnowflake(TestCase):
             columns=['"ID" INTEGER', '"COLUMN WITH SPACE" CHARACTER VARYING'],
             primary_key=['"ID"'],
         )
-        assert self.snowflake.executed_queries == [
-            'CREATE OR REPLACE TABLE test_schema."TABLE WITH SPACE" ('
+        self.assertListEqual(self.snowflake.executed_queries, [
+            'CREATE OR REPLACE TABLE "TEST_SCHEMA"."TABLE WITH SPACE" ('
             '"ID" INTEGER,"COLUMN WITH SPACE" CHARACTER VARYING,'
             '_SDC_EXTRACTED_AT TIMESTAMP_NTZ,'
             '_SDC_BATCHED_AT TIMESTAMP_NTZ,'
             '_SDC_DELETED_AT VARCHAR'
-            ', PRIMARY KEY ("ID"))'
-        ]
+            ', PRIMARY KEY ("ID"))',
+            'alter table "TEST_SCHEMA"."TABLE WITH SPACE" alter column "ID" drop not null;'
+        ])
 
         # Create table with composite primary key
         self.snowflake.executed_queries = []
@@ -144,15 +184,17 @@ class TestFastSyncTargetSnowflake(TestCase):
                 '"NUM" INTEGER',
                 '"COLUMN WITH SPACE" CHARACTER VARYING',
             ],
-            primary_key=['"ID", "NUM"'],
+            primary_key=['"ID"', '"NUM"'],
         )
         assert self.snowflake.executed_queries == [
-            'CREATE OR REPLACE TABLE test_schema."TABLE WITH SPACE" ('
+            'CREATE OR REPLACE TABLE "TEST_SCHEMA"."TABLE WITH SPACE" ('
             '"ID" INTEGER,"NUM" INTEGER,"COLUMN WITH SPACE" CHARACTER VARYING,'
             '_SDC_EXTRACTED_AT TIMESTAMP_NTZ,'
             '_SDC_BATCHED_AT TIMESTAMP_NTZ,'
             '_SDC_DELETED_AT VARCHAR'
-            ', PRIMARY KEY ("ID", "NUM"))'
+            ', PRIMARY KEY ("ID","NUM"))',
+            'alter table "TEST_SCHEMA"."TABLE WITH SPACE" alter column "ID" drop not null;',
+            'alter table "TEST_SCHEMA"."TABLE WITH SPACE" alter column "NUM" drop not null;'
         ]
 
         # Create table with no primary key
@@ -163,13 +205,13 @@ class TestFastSyncTargetSnowflake(TestCase):
             columns=['"ID" INTEGER', '"TXT" CHARACTER VARYING'],
             primary_key=None,
         )
-        assert self.snowflake.executed_queries == [
-            'CREATE OR REPLACE TABLE test_schema."TEST_TABLE_NO_PK" ('
+        self.assertListEqual(self.snowflake.executed_queries, [
+            'CREATE OR REPLACE TABLE "TEST_SCHEMA"."TEST_TABLE_NO_PK" ('
             '"ID" INTEGER,"TXT" CHARACTER VARYING,'
             '_SDC_EXTRACTED_AT TIMESTAMP_NTZ,'
             '_SDC_BATCHED_AT TIMESTAMP_NTZ,'
             '_SDC_DELETED_AT VARCHAR)'
-        ]
+        ])
 
     def test_copy_to_table(self):
         """Validate if COPY command generated correctly"""

@@ -43,7 +43,7 @@ def load_json(path):
 def save_dict_to_json(path, data):
     LOGGER.info('Saving new state file to %s', path)
     with open(path, 'w', encoding='utf-8') as fil:
-        fil.write(json.dumps(data))
+        fil.write(json.dumps(data, indent=4, sort_keys=True))
 
 
 def check_config(config, required_keys):
@@ -415,7 +415,7 @@ def get_pool_size(tap: Dict) -> int:
 
 
 def gen_export_filename(
-    tap_id: str, table: str, suffix: str = None, postfix: str = None, ext: str = None
+    tap_id: str, table: str, suffix: str = None, postfix: str = None, ext: str = None, sync_type: str = 'fastsync'
 ) -> str:
     """
     Generates a unique filename used for exported fastsync data that avoids file name collision
@@ -442,6 +442,4 @@ def gen_export_filename(
     if not ext:
         ext = 'csv.gz'
 
-    return 'pipelinewise_{}_{}_{}_fastsync_{}.{}'.format(
-        tap_id, table, suffix, postfix, ext
-    )
+    return f'pipelinewise_{tap_id}_{table}_{suffix}_{sync_type}_{postfix}.{ext}'

@@ -1,11 +1,15 @@
 import csv
 import datetime
 import decimal
+import glob
 import logging
-from typing import Tuple
-
+import os
 import pymysql
-from pymysql import InterfaceError, OperationalError
+import pymysql.cursors
+
+from argparse import Namespace
+from typing import Tuple, Dict, Callable
+from pymysql import InterfaceError, OperationalError, Connection
 
 from ...utils import safe_column_name
 from . import split_gzip, utils
@@ -14,6 +18,9 @@ LOGGER = logging.getLogger(__name__)
 
 DEFAULT_CHARSET = 'utf8'
 DEFAULT_EXPORT_BATCH_ROWS = 50000
+MARIADB_ENGINE = 'mariadb'
+MYSQL_ENGINE = 'mysql'
+DEFAULT_USE_GTID = False
 DEFAULT_SESSION_SQLS = [
     'SET @@session.time_zone="+0:00"',
     'SET @@session.wait_timeout=28800',
@@ -27,7 +34,7 @@ class FastSyncTapMySql:
     Common functions for fastsync from a MySQL database
     """
 
-    def __init__(self, connection_config: dict, tap_type_to_target_type, target_quote=None):
+    def __init__(self, connection_config: dict, tap_type_to_target_type: Callable, target_quote=None):
         self.connection_config = connection_config
         self.connection_config['charset'] = connection_config.get(
             'charset', DEFAULT_CHARSET
@@ -38,45 +45,68 @@ class FastSyncTapMySql:
         self.connection_config['session_sqls'] = connection_config.get(
             'session_sqls', DEFAULT_SESSION_SQLS
         )
+        self.connection_config['use_gtid'] = connection_config.get(
+            'use_gtid', DEFAULT_USE_GTID
+        )
+        self.connection_config['engine'] = connection_config.get(
+            'engine', MYSQL_ENGINE
+        )
         self.tap_type_to_target_type = tap_type_to_target_type
         self.target_quote = target_quote
         self.conn = None
         self.conn_unbuffered = None
         self.is_replica = False
 
-    def get_connection_parameters(self) -> Tuple[dict, bool]:
+    @property
+    def is_mariadb(self) -> bool:
+        """
+        Property method, to find if the engine is mariadb or not
+        Returns: bool
+        """
+        return self.connection_config['engine'] == MARIADB_ENGINE
+
+    def get_connection_parameters(self, prioritize_primary: bool = False) -> Tuple[dict, bool]:
         """
         Method to get connection parameters
         Connection is either to the primary or a replica if its credentials are given
 
-        Args:
-            connection_config: dictionary containing the db connection details
+        Args: prioritize_primary (bool): Flag to force getting the primary's connection details even if replica have
+        been provided
+
         Returns:
-            dict with credentials
+            Tuple of Dict with credentials and flag of whether the connection is to replica or not.
         """
 
         is_replica = False
 
-        if 'replica_host' in self.connection_config:
-            is_replica = True
+        if prioritize_primary:
+            host = self.connection_config['host']
+            port = int(self.connection_config['port'])
+            user = self.connection_config['user']
+            password = self.connection_config['password']
+        else:
+            if 'replica_host' in self.connection_config:
+                is_replica = True
 
-        host = self.connection_config.get('replica_host', self.connection_config['host'])
-        port = int(self.connection_config.get('replica_port', self.connection_config['port']))
-        user = self.connection_config.get('replica_user', self.connection_config['user'])
-        password = self.connection_config.get('replica_password', self.connection_config['password'])
+            host = self.connection_config.get('replica_host', self.connection_config['host'])
+            port = int(self.connection_config.get('replica_port', self.connection_config['port']))
+            user = self.connection_config.get('replica_user', self.connection_config['user'])
+            password = self.connection_config.get('replica_password', self.connection_config['password'])
+
         charset = self.connection_config['charset']
 
         return ({
-            'host': host,
-            'port': port,
-            'user': user,
-            'password': password,
-            'charset': charset,
-        }, is_replica)
+                    'host': host,
+                    'port': port,
+                    'user': user,
+                    'password': password,
+                    'charset': charset,
+                }, is_replica)
 
     def open_connections(self):
         """
-        Open connection
+        Open connection to primary or replica depending on the config
+        This sets the instance attributes "conn" and "conn_unbuffered"
         """
 
         # Fastsync is using replica_{host|port|user|password} values from the config by default
@@ -89,11 +119,11 @@ class FastSyncTapMySql:
 
         self.is_replica = is_replica
 
-        self.conn = pymysql.connect(
+        self.conn: Connection = pymysql.connect(
             **conn_params,
             cursorclass=pymysql.cursors.DictCursor,
         )
-        self.conn_unbuffered = pymysql.connect(
+        self.conn_unbuffered: Connection = pymysql.connect(
             **conn_params,
             cursorclass=pymysql.cursors.SSCursor,
         )
@@ -176,11 +206,50 @@ class FastSyncTapMySql:
 
             raise exc
 
-    def fetch_current_log_pos(self):
+    def fetch_current_log_pos(self) -> Dict:
         """
         Get the actual binlog position in MySQL
+
+        Returns: log coordinates in a dictionary, could be GTID pos or binlog file and pos.
+        """
+        if self.connection_config['use_gtid']:
+            return self._get_current_gtid_pos()
+
+        return self._get_binlog_coordinates()
+
+    def _get_current_gtid_pos(self) -> Dict:
+        """
+        Get the current GTID position in server
+
+        Raises:
+            Exception: if GTID is not found on the server
+        Returns: Dict with GTID position
+        Examples:
+            {
+                "gtid": "0-1774983-23"
+            }
+        """
+        if self.is_mariadb:
+            return self.__find_mariadb_gtid_pos()
+
+        return self.__find_mysql_gtid_pos()
+
+    def _get_binlog_coordinates(self) -> Dict:
+        """
+        Get the actual binlog file and position in server
+
+        Raises:
+            Exception: if binlog is not enabled
+        Returns: a dict with binlog coordinate and version
+        Examples:
+             {
+                "log_file": "binlog.00001",
+                "log_pos": 334,
+                "version": 1,
+             }
         """
         if self.is_replica:
+            LOGGER.debug('Connecting to replica to get binlog coordinates...')
             result = self.query('SHOW SLAVE STATUS')
             if len(result) == 0:
                 raise Exception('MySQL binary logging is not enabled.')
@@ -190,6 +259,7 @@ class FastSyncTapMySql:
             version = binlog_pos.get('version', 1)
 
         else:
+            LOGGER.debug('Connecting to primary to get binlog coordinates...')
             result = self.query('SHOW MASTER STATUS')
             if len(result) == 0:
                 raise Exception('MySQL binary logging is not enabled.')
@@ -210,11 +280,11 @@ class FastSyncTapMySql:
         Get the actual incremental key position in the table
         """
         result = self.query(
-            'SELECT MAX({}) AS key_value FROM {}'.format(replication_key, table)
+            f'SELECT MAX({replication_key}) AS key_value FROM {table}'
         )
-        if len(result) == 0:
+        if not result:
             raise Exception(
-                'Cannot get replication key value for table: {}'.format(table)
+                f'Cannot get replication key value for table: {table}'
             )
 
         mysql_key_value = result[0].get('key_value')
@@ -241,9 +311,8 @@ class FastSyncTapMySql:
         Get the primary key of a table
         """
         table_dict = utils.tablename_to_dict(table_name)
-        sql = "SHOW KEYS FROM `{}`.`{}` WHERE Key_name = 'PRIMARY'".format(
-            table_dict['schema_name'], table_dict['table_name']
-        )
+        sql = f"SHOW KEYS FROM `{table_dict['schema_name']}`.`{table_dict['table_name']}` WHERE Key_name = 'PRIMARY'"
+
         pk_specs = self.query(sql)
         if len(pk_specs) > 0:
             return [
@@ -338,15 +407,16 @@ class FastSyncTapMySql:
 
     # pylint: disable=too-many-locals
     def copy_table(
-        self,
-        table_name,
-        path,
-        max_num=None,
-        date_type='date',
-        split_large_files=False,
-        split_file_chunk_size_mb=1000,
-        split_file_max_chunks=20,
-        compress=True,
+            self,
+            table_name,
+            path,
+            max_num=None,
+            date_type='date',
+            split_large_files=False,
+            split_file_chunk_size_mb=1000,
+            split_file_max_chunks=20,
+            compress=True,
+            where_clause_sql='',
     ):
         """
         Export data from table to a zipped csv
@@ -366,15 +436,20 @@ class FastSyncTapMySql:
             raise Exception('{} table not found.'.format(table_name))
 
         table_dict = utils.tablename_to_dict(table_name)
+
+        column_safe_sql_values = column_safe_sql_values + [
+            "CONVERT_TZ( NOW(),@@session.time_zone,'+00:00') AS `_SDC_EXTRACTED_AT`",
+            "CONVERT_TZ( NOW(),@@session.time_zone,'+00:00') AS `_SDC_BATCHED_AT`",
+            'null AS `_SDC_DELETED_AT`'
+        ]
+
         sql = """SELECT {}
-        ,CONVERT_TZ( NOW(),@@session.time_zone,'+00:00') AS _SDC_EXTRACTED_AT
-        ,CONVERT_TZ( NOW(),@@session.time_zone,'+00:00') AS _SDC_BATCHED_AT
-        ,null AS _SDC_DELETED_AT
-        FROM `{}`.`{}`
+        FROM `{}`.`{}` {}
         """.format(
             ','.join(column_safe_sql_values),
             table_dict['schema_name'],
             table_dict['table_name'],
+            where_clause_sql
         )
         export_batch_rows = self.connection_config['export_batch_rows']
         exported_rows = 0
@@ -420,3 +495,137 @@ class FastSyncTapMySql:
                 LOGGER.info(
                     'Exported total of %s rows from %s...', exported_rows, table_name
                 )
+
+    def export_source_table_data(
+            self, args: Namespace, tap_id: str, where_clause_sql: str = '') -> list:
+        """Export source table data"""
+        filename = utils.gen_export_filename(tap_id=tap_id, table=args.table, sync_type='partialsync')
+        filepath = os.path.join(args.temp_dir, filename)
+
+        # Exporting table data
+
+        self.copy_table(
+            args.table,
+            filepath,
+            split_large_files=args.target.get('split_large_files'),
+            split_file_chunk_size_mb=args.target.get('split_file_chunk_size_mb'),
+            split_file_max_chunks=args.target.get('split_file_max_chunks'),
+            where_clause_sql=where_clause_sql,
+        )
+        file_parts = glob.glob(f'{filepath}*')
+        return file_parts
+
+    def __get_primary_server_uuid(self) -> str:
+        """
+        Fetches the primary server's UUID
+
+        Returns: server uuid
+        """
+        conn = pymysql.connect(**self.get_connection_parameters(prioritize_primary=True)[0],
+                               cursorclass=pymysql.cursors.DictCursor) if self.is_replica else None
+
+        result = self.query('select @@server_uuid as server_uuid;', conn)
+
+        if conn:
+            conn.close()
+
+        return result[0]['server_uuid']
+
+    def __get_primary_server_id(self) -> int:
+        """
+        Fetches the primary server's ID
+
+        Returns: server uuid
+        """
+        conn = pymysql.connect(**self.get_connection_parameters(prioritize_primary=True)[0],
+                               cursorclass=pymysql.cursors.DictCursor) if self.is_replica else None
+
+        result = self.query('select @@server_id as server_id;', conn)
+
+        if conn:
+            conn.close()
+
+        return result[0]['server_id']
+
+    def __find_mariadb_gtid_pos(self) -> Dict[str, str]:
+        """
+        Finds the current GTID pos in mariadb
+        Returns: Dict with gtid key
+        Raises: Exception if GTID is not enabled or not found
+        """
+        if self.is_replica:
+            LOGGER.info('Connecting to replica to get gtid...')
+            result = self.query('select @@gtid_slave_pos as current_gtids;')
+
+        else:
+            LOGGER.info('Connecting to primary to get gtid...')
+            result = self.query('select @@gtid_current_pos as current_gtids;')
+
+        if not result:
+            raise Exception('GTID is not enabled.')
+
+        gtids = result[0]['current_gtids']
+
+        server_id = str(self.__get_primary_server_id())
+
+        LOGGER.info('Found GTID(s): %s in server "%s"', gtids, server_id)
+
+        for gtid in gtids.split(','):
+            gtid = gtid.strip()
+
+            if not gtid:
+                continue
+
+            gtid_parts = gtid.split('-')
+            if len(gtid_parts) != 3:
+                continue
+
+            if gtid_parts[1] == server_id:
+                LOGGER.info('Using GTID %s for state bookmark', gtid)
+                return {
+                    'gtid': gtid,
+                }
+
+        raise Exception('No suitable GTID was found.')
+
+    def __find_mysql_gtid_pos(self) -> Dict[str, str]:
+        """
+        Finds the current GTID pos in mariadb
+        Returns: Dict with gtid key
+        Raises: Exception if GTID is not enabled or not found
+       """
+
+        result = self.query('select @@gtid_mode as gtid_mode;')
+
+        if not result or result[0].get('gtid_mode') != 'ON':
+            raise Exception('GTID mode is not enabled.')
+
+        result = self.query('select @@GLOBAL.gtid_executed as current_gtids;')
+
+        if not result:
+            raise Exception('No GTID was found with "@@GLOBAL.gtid_executed".')
+
+        gtids = result[0]['current_gtids']
+
+        server_uuid = self.__get_primary_server_uuid()
+
+        LOGGER.info('Found GTID(s): %s', gtids)
+
+        for gtid in gtids.split(','):
+            gtid = gtid.strip()
+
+            if not gtid:
+                continue
+
+            gtid_parts = gtid.split(':')
+
+            if len(gtid_parts) != 2:
+                continue
+
+            if gtid_parts[0] == server_uuid:
+                LOGGER.info('Using GTID %s for state bookmark', gtid)
+                return {
+                    'gtid': gtid,
+                }
+
+        raise Exception('No suitable GTID was found.')

@@ -4,9 +4,9 @@ import json
 import boto3
 import snowflake.connector
 
-from typing import List, Dict
+from typing import List, Dict, Optional
 from snowflake.connector.encryption_util import SnowflakeEncryptionUtil
-from snowflake.connector.remote_storage_util import SnowflakeFileEncryptionMaterial
+from snowflake.connector.storage_client import SnowflakeFileEncryptionMaterial
 
 from . import utils
 from .transform_utils import TransformationHelper, SQLFlavor
@@ -217,9 +217,10 @@ class FastSyncTargetSnowflake:
         target_schema: str,
         table_name: str,
         columns: List[str],
-        primary_key: List[str],
+        primary_key: Optional[List[str]],
         is_temporary: bool = False,
         sort_columns=False,
+        allow_replace_table=True
     ):
 
         table_dict = utils.tablename_to_dict(table_name)
@@ -252,17 +253,52 @@ class FastSyncTargetSnowflake:
         if sort_columns:
             columns.sort()
 
+        full_table_name = self._get_full_qualified_table_name(target_schema, target_table)
+
         sql_columns = ','.join(columns)
         sql_primary_keys = ','.join(primary_key) if primary_key else None
+        create_sql = 'OR REPLACE TABLE' if allow_replace_table else 'TABLE IF NOT EXISTS'
+
         sql = (
-            f'CREATE OR REPLACE TABLE {target_schema}."{target_table.upper()}" ('
-            f'{sql_columns}'
+            f'CREATE {create_sql} {full_table_name} ({sql_columns}'
             f'{f", PRIMARY KEY ({sql_primary_keys}))" if primary_key else ")"}'
         )
 
         self.query(
             sql, query_tag_props={'schema': target_schema, 'table': target_table}
         )
+
+        self._drop_pk_non_nullability(target_schema, target_table, primary_key)
+
+    def _drop_pk_non_nullability(self, target_schema: str, target_table: str, primary_keys: Optional[List[str]]):
+        """
+        Drop non-null constraints on PK columns in the given table
+
+        Args:
+            target_schema: schema name where table is
+            target_table: table name to alter
+            primary_keys: list of primary key columns of the table, column are uppercase and wrapped in double quotes
+        """
+        if not primary_keys:
+            return
+
+        full_table_name = self._get_full_qualified_table_name(target_schema, target_table)
+
+        for p_key in primary_keys:
+            sql = f'alter table {full_table_name} alter column {p_key.upper()} drop not null;'
+            self.query(sql, query_tag_props={'schema': target_schema, 'table': target_table})
+
+    @staticmethod
+    def _get_full_qualified_table_name(schema: str, table: str) -> str:
+        """
+        Constructs the full qualified table name as "SCHEMA_NAME"."TABLE_NAME"
+        Args:
+            schema: schema name in SF
+            table: table name in SF
+
+        Returns: str: full qualified name
+        """
+        return f'"{schema.upper()}"."{table.upper()}"'
 
     # pylint: disable=too-many-locals
     def copy_to_table(
@@ -384,6 +420,28 @@ class FastSyncTargetSnowflake:
 
         LOGGER.info('Obfuscation rules applied.')
 
+    def merge_tables(self, schema, source_table, target_table, columns, primary_keys):
+        on_clause = ' AND '.join(
+            [f'"{source_table.upper()}".{p.upper()} = "{target_table.upper()}".{p.upper()}' for p in primary_keys]
+        )
+        update_clause = ', '.join(
+            [f'"{target_table.upper()}".{c.upper()} = "{source_table.upper()}".{c.upper()}' for c in columns]
+        )
+        columns_for_insert = ', '.join([f'{c.upper()}' for c in columns])
+        values = ', '.join([f'"{source_table.upper()}".{c.upper()}' for c in columns])
+
+        query = f'MERGE INTO {schema}."{target_table.upper()}" USING {schema}."{source_table.upper()}"'  \
+                f' ON {on_clause}'  \
+                f' WHEN MATCHED THEN UPDATE SET {update_clause}'  \
+                f' WHEN NOT MATCHED THEN INSERT ({columns_for_insert})'  \
+                f' VALUES ({values})'
+        self.query(query)
+
+    def partial_hard_delete(self, schema, table, where_clause_sql):
+        self.query(
+            f'DELETE FROM {schema}."{table.upper()}"{where_clause_sql} AND _SDC_DELETEd_AT IS NOT NULL'
+        )
+
     def swap_tables(self, schema, table_name) -> None:
         """
         Swaps given target table with its temp version and drops the latter
@@ -406,6 +464,13 @@ class FastSyncTargetSnowflake:
             f'DROP TABLE IF EXISTS {schema}."{temp_table.upper()}"',
             query_tag_props={'schema': schema, 'table': temp_table},
         )
+
+    def add_columns(self, schema: str, table_name: str, adding_columns: dict) -> None:
+        if adding_columns:
+            add_columns_list = [f'{column_name} {column_type}' for column_name, column_type in adding_columns.items()]
+            add_clause = ', '.join(add_columns_list)
+            query = f'ALTER TABLE {schema}."{table_name.upper()}" ADD {add_clause}'
+            self.query(query)
 
     def __apply_transformations(
         self, transformations: List[Dict], target_schema: str, table_name: str

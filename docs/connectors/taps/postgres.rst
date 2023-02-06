@@ -8,8 +8,6 @@ Tap PostgreSQL
 PostgreSQL setup requirements
 '''''''''''''''''''''''''''''
 
-*(Section based on Stitch documentation)*
-
 **Step 1: Check if you have all the required credentials for replicating data from PostgreSQL**
 
 * ``CREATEROLE`` or ``SUPERUSER`` privilege - Either permission is required to create a database user for PipelineWise.
@@ -59,7 +57,9 @@ In order for pipelinewise user to automatically be able to access any tables cre
 
 **Step 3.1: Install the wal2json plugin**
 
-To use :ref:`log_based` for your PostgreSQL integration, you must install the `wal2json <https://github.com/eulerto/wal2json>`_ plugin. The wal2json plugin outputs JSON objects for logical decoding, which Stitch then uses to perform Log-based Replication.
+To use :ref:`log_based` for your PostgreSQL integration, you must install the `wal2json <https://github
+.com/eulerto/wal2json>`_ plugin that has support for format-version=2 (wal2json >= 2.3). The wal2json plugin outputs
+JSON objects for logical decoding, which the tap then uses to perform Log-based Replication.
 
 Steps for installing the plugin vary depending on your operating system. Instructions for each operating system type are in the wal2json’s GitHub repository:
 
@@ -121,6 +121,7 @@ Example YAML for ``tap-postgres``:
     type: "tap-postgres"                   # !! THIS SHOULD NOT CHANGE !!
     owner: "somebody@foo.com"              # Data owner to contact
     #send_alert: False                     # Optional: Disable all configured alerts on this tap
+    #slack_alert_channel: "#tap-channel"   # Optional: Sending a copy of specific tap alerts to this slack channel
 
 
     # ------------------------------------------------------------------------------
@@ -196,6 +197,13 @@ Example YAML for ``tap-postgres``:
           # You can add as many tables as you need...
           - table_name: "table_two"
             replication_method: "LOG_BASED"     # Important! Log based must be enabled in MySQL
+
+           - table_name: "table_three"
+             replication_method: "LOG_BASED"
+             sync_start_from:                   # Optional, applies for then first sync and fast sync
+               column: "column_name"            # column name to be picked for partial sync with inremental or timestamp value
+               value: "start_value"             # The first sync always starts from column >= value
+               drop_target_table: true          # Optional, drops target table before syncing. default value is false
 
       # You can add as many schemas as you need...
       # Uncomment this if you want replicate tables from multiple schemas

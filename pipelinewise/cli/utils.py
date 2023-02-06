@@ -14,6 +14,7 @@ import tempfile
 import warnings
 import jsonschema
 import yaml
+import shutil
 
 from io import StringIO
 from datetime import date, datetime
@@ -471,6 +472,15 @@ def get_fastsync_bin(venv_dir, tap_type, target_type):
     return os.path.join(venv_dir, 'pipelinewise', 'bin', fastsync_name)
 
 
+def get_partialsync_bin(venv_dir, tap_type, target_type):
+    """Get the absolute path of partial sync table executable"""
+    source = tap_type.replace('tap-', '')
+    target = target_type.replace('target-', '')
+    partialsync_name = f'partial-{source}-to-{target}'
+
+    return os.path.join(venv_dir, 'pipelinewise', 'bin', partialsync_name)
+
+
 def get_pipelinewise_python_bin(venv_dir: str) -> str:
     """
     Get the absolute path of a PPW python executable
@@ -556,3 +566,16 @@ def generate_random_string(length: int = 8) -> str:
     return ''.join(
         secrets.choice(string.ascii_uppercase + string.digits) for _ in range(length)
     )
+
+
+def create_backup_of_the_file(original_file_path: str) -> None:
+    """
+    create a backup of the input file in the same directory
+    Args:
+        original_file_path: the original file path to make a back up of it.
+    """
+    try:
+        shutil.copy(original_file_path, f'{original_file_path}.bak')
+    except FileNotFoundError:
+        with open(f'{original_file_path}.bak', 'w', encoding='utf-8') as tmp_file:
+            tmp_file.write('ORIGINAL FILE DID NOT EXIST!')

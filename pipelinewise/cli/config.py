@@ -6,7 +6,7 @@ import os
 import sys
 import json
 
-from typing import Dict, List
+from typing import Dict, List, Union
 
 from pipelinewise.utils import safe_column_name
 from . import utils
@@ -159,7 +159,16 @@ class Config:
             'pidfile': os.path.join(connector_dir, 'pipelinewise.pid'),
         }
 
-    def save(self):
+    @staticmethod
+    def get_connector_config_file(connector_dir: str) -> str:
+        """
+        Returns the absolute path of a tap configuration file
+        Args:
+            connector_dir: the absolute path of the connector
+        """
+        return os.path.join(connector_dir, 'config.json')
+
+    def save(self, selected_taps: Union[None, List] = None):
         """
         Generating pipelinewise configuration directory layout on the disk.
 
@@ -167,6 +176,7 @@ class Config:
         into a common directory structure and usually deployed into
         ~/.pipelinewise
         """
+        selected_taps_list = selected_taps if selected_taps else ['*']
         self.logger.info('SAVING CONFIG')
         self.save_main_config_json()
 
@@ -176,10 +186,11 @@ class Config:
 
             # Save every tap JSON files
             for tap in target['taps']:
-                extra_config_keys = utils.get_tap_extra_config_keys(
-                    tap, self.get_temp_dir()
-                )
-                self.save_tap_jsons(target, tap, extra_config_keys)
+                if tap['id'] in selected_taps_list or selected_taps_list == ['*']:
+                    extra_config_keys = utils.get_tap_extra_config_keys(
+                        tap, self.get_temp_dir()
+                    )
+                    self.save_tap_jsons(target, tap, extra_config_keys)
 
     def save_main_config_json(self):
         """
@@ -196,8 +207,7 @@ class Config:
             target = target_tuple[1]
             taps = []
             for tap in target.get('taps'):
-                taps.append(
-                    {
+                tap_setting = {
                         'id': tap.get('id'),
                         'name': tap.get('name'),
                         'type': tap.get('type'),
@@ -206,7 +216,9 @@ class Config:
                         'send_alert': tap.get('send_alert', True),
                         'enabled': True,
                     }
-                )
+                if tap.get('slack_alert_channel'):
+                    tap_setting['slack_alert_channel'] = tap['slack_alert_channel']
+                taps.append(tap_setting)
 
             targets.append(
                 {
@@ -315,6 +327,7 @@ class Config:
             schema_name = schema.get('source_schema')
             for table in schema.get('tables', []):
                 table_name = table.get('table_name')
+                sync_start_from = table.get('sync_start_from')
                 replication_method = table.get(
                     'replication_method', utils.get_tap_default_replication_method(tap)
                 )
@@ -328,6 +341,8 @@ class Config:
                             # Add replication_key only if replication_method is INCREMENTAL
                             'replication_key': table.get('replication_key')
                             if replication_method == 'INCREMENTAL' else None,
+                            'sync_start_from': sync_start_from
+                            if sync_start_from else None
                         }
                     )
                 )
