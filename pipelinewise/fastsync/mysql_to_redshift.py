@@ -56,7 +56,7 @@ def tap_type_to_target_type(mysql_type, mysql_column_type):
         else 'NUMERIC NULL',
         'smallint': 'NUMERIC NULL',
         'mediumint': 'NUMERIC NULL',
-        'bigint': 'NUMERIC NULL',
+        'bigint': 'BIGINT NULL',
         'bit': 'BOOLEAN',
         'decimal': 'FLOAT',
         'double': 'FLOAT',
