@@ -1,2 +1,2 @@
-pipelinewise-target-redshift @ git+https://github.com/neeteshbento/pipelinewise-target-redshift@master
+pipelinewise-target-redshift @ git+https://github.com/neeteshbento/pipelinewise-target-redshift@v1.6.0#egg=pipelinewise-target-redshift
 
