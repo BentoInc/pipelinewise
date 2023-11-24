@@ -10,10 +10,9 @@ RUN apt-get -qq update \
         libaio1 \
         mbuffer \
         wget \
+        git \
     && rm -rf /var/lib/apt/lists/* \
     && pip install -U --no-cache-dir pip
-
-RUN apt-get install git    
 
 # Add Mongodb ppa
 RUN wget -qO - https://www.mongodb.org/static/pgp/server-4.4.asc | apt-key add - \
