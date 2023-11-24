@@ -13,6 +13,8 @@ RUN apt-get -qq update \
     && rm -rf /var/lib/apt/lists/* \
     && pip install -U --no-cache-dir pip
 
+RUN apt-get install git-all    
+
 # Add Mongodb ppa
 RUN wget -qO - https://www.mongodb.org/static/pgp/server-4.4.asc | apt-key add - \
     && echo "deb [ arch=amd64 ] https://repo.mongodb.org/apt/ubuntu bionic/mongodb-org/4.4 multiverse" | tee /etc/apt/sources.list.d/mongodb.list \
