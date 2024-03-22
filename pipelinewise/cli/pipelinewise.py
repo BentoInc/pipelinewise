@@ -279,7 +279,7 @@ class PipelineWise:
                         or initial_sync_required == f_initial_sync_required
                     )
                 ):
-                    self.logger.info(
+                    self.logger.debug(
                         """Filter condition(s) matched:
                         Table              : %s
                         Tap Stream ID      : %s
@@ -304,7 +304,6 @@ class PipelineWise:
                     # if the stream is a new table and is a singer stream, then mark it as selected to sync in the
                     # the fallback properties as well if the table is selected in the original properties.
                     # Otherwise, mark it as not selected
-                    self.logger.info(f"create_fallback:{create_fallback}")
                     if create_fallback:
                         if new_stream and replication_method in [
                             self.INCREMENTAL,
@@ -313,7 +312,6 @@ class PipelineWise:
                             fallback_properties['streams'][stream_idx]['metadata'][
                                 meta_idx
                             ]['metadata']['selected'] = True
-                            self.logger.info(f"check selected:{selected}")
                             if selected:
                                 fallback_filtered_stream_ids.append(tap_stream_id)
                         else:
@@ -321,7 +319,6 @@ class PipelineWise:
                                 meta_idx
                             ]['metadata']['selected'] = False
                 else:
-                    self.logger.info(f"else condition:{tap_stream_id}")
                     # Filter condition didn't match: mark table as not selected to sync
                     properties['streams'][stream_idx]['metadata'][meta_idx]['metadata'][
                         'selected'
@@ -332,7 +329,6 @@ class PipelineWise:
                     if create_fallback and selected is True:
                         fallback_properties['streams'][stream_idx]['metadata'][
                             meta_idx
-                            
                         ]['metadata']['selected'] = True
                         fallback_filtered_stream_ids.append(tap_stream_id)
 
