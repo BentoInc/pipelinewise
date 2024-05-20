@@ -250,13 +250,13 @@ class FastSyncTapMySql:
         """
         if self.is_replica:
             LOGGER.debug('Connecting to replica to get binlog coordinates...')
-            result = self.query('SHOW SLAVE STATUS')
+            result = self.query('SHOW REPLICA STATUS')
             if len(result) == 0:
                 raise Exception('MySQL binary logging is not enabled.')
             binlog_pos = result[0]
-            log_file = binlog_pos.get('Master_Log_File')
-            log_pos = binlog_pos.get('Read_Master_Log_Pos')
-            version = binlog_pos.get('version', 1)
+            log_file = binlog_pos.get('Source_Log_File')
+            log_pos = binlog_pos.get('Source_Log_Position')
+            version = binlog_pos.get('Source_Server_Version', 1)
 
         else:
             LOGGER.debug('Connecting to primary to get binlog coordinates...')
